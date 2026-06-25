@@ -1,0 +1,29 @@
+# content-addressable — foundational content-addressing crate.
+#
+# IPLD-native by decision: CIDs and the dag-cbor codec come from the
+# multiformats stack, not a homegrown implementation. See README.md.
+[package]
+name = "content-addressable"
+version = "0.1.0-alpha.1"
+edition = "2021"
+rust-version = "1.81"
+license = "Apache-2.0"
+description = "IPLD-native content addressing: data that carries its own proof of integrity, intrinsically (BLAKE3 + CIDv1 + canonical dag-cbor)."
+repository = "https://github.com/hartsock/content-addressable"
+keywords = ["content-addressing", "ipld", "cid", "merkle", "blake3"]
+categories = ["cryptography", "data-structures", "encoding"]
+
+[dependencies]
+# ipld-core re-exports the `cid` crate (as ipld_core::cid) which in turn
+# re-exports `multihash` (as ipld_core::cid::multihash). Enabling the `serde`
+# feature turns on `cid/serde`, which encodes a Cid as a dag-cbor tag-42 link.
+ipld-core = { version = "0.4", features = ["serde"] }
+# Canonical dag-cbor codec (strict map ordering, definite-length, tag-42 links).
+serde_ipld_dagcbor = "0.6"
+# BLAKE3 digest (multihash code 0x1e).
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }

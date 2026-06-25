@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# PIPELINE PARITY: mirrors .github/workflows/ci.yml.
+# When editing this file, verify it still matches the CI pipeline (same
+# fmt/clippy/test steps). This hook is the local equivalent of the CI gates;
+# do not bypass it with --no-verify.
+set -euo pipefail
+
+echo "==> cargo fmt --check"
+cargo fmt -- --check
+
+echo "==> cargo clippy --all-targets -- -D warnings"
+cargo clippy --all-targets -- -D warnings
+
+echo "==> cargo test (includes doctests)"
+cargo test
+
+echo "pre-push checks passed."

@@ -127,3 +127,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# --- Rust ---
+# Build artifacts (cargo default output dir).
+/target
+
+# This is a library: do NOT commit Cargo.lock. Applications commit it; libraries
+# leave dependency resolution to downstream consumers.
+Cargo.lock
