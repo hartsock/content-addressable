@@ -1,12 +1,16 @@
-# HOOK PARITY: the cargo fmt/clippy/test/doc jobs are mirrored by
-# .githooks/pre-push. When editing those, update the push hook to match. The
+# HOOK PARITY: the cargo fmt/clippy/test/doc jobs AND the `leaf-deps` job are
+# mirrored by .githooks/pre-push. When editing those, update the push hook to
+# match. The
 # build/test/clippy jobs run with `--all-features` so the default-OFF `merkle`
 # feature (src/merkle.rs / MerkleNode) is actually compiled and tested; the
 # `test` job additionally runs a plain `cargo test` to keep the default-feature
 # surface green and to prove `merkle` stays off by default. The `doc` job runs
 # rustdoc with `-D warnings` (`--all-features`) so a broken intra-doc link fails
 # CI — API-surface hygiene (issue #9); it is mirrored in the hook (rustdoc is
-# cheap).
+# cheap). The `leaf-deps` job runs scripts/check-leaf-deps.sh, which asserts the
+# published core crate's dependency closure is registry-only (no path/git deps),
+# keeping it a true leaf (issue #13); it reads only `cargo metadata` (no build),
+# so it is fast and offline and is mirrored in the hook (true parity).
 #
 # CI-ONLY jobs (documented exceptions, NOT in the hook):
 #   - `msrv` pins `dtolnay/rust-toolchain@1.85` and runs build+test so a
@@ -110,6 +114,22 @@ jobs:
           components: rustfmt
       - name: cargo fmt --check
         run: cargo fmt -- --check
+
+  leaf-deps:
+    name: leaf-deps (published core is a true leaf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # No build cache and no compilation: the guard only reads `cargo
+      # metadata`, asserting the `content-addressable` core's resolved
+      # dependency closure is registry-only (no path/git/workspace edges) so it
+      # stays a publishable leaf (issue #13). The legitimate
+      # `content-addressable-py -> content-addressable` path edge is a REVERSE
+      # dep of the core and is never inside the core's forward closure, so the
+      # guard tolerates it by construction.
+      - name: check published core is a true leaf
+        run: ./scripts/check-leaf-deps.sh
 
   python:
     name: python (PyO3 face)

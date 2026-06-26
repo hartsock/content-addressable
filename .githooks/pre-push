@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# PIPELINE PARITY: mirrors the cargo fmt/clippy/test/doc jobs in
-# .github/workflows/ci.yml. When editing this file, verify it still matches the
-# CI pipeline; do not bypass it with --no-verify.
+# PIPELINE PARITY: mirrors the cargo fmt/clippy/test/doc jobs AND the
+# `leaf-deps` job in .github/workflows/ci.yml. When editing this file, verify it
+# still matches the CI pipeline; do not bypass it with --no-verify.
 #
 # DOCUMENTED EXCEPTIONS — two CI jobs are deliberately NOT run here:
 #   - `msrv` (build+test on dtolnay/rust-toolchain@1.85): installing a second
@@ -14,7 +14,9 @@
 #     extension module on every push is too heavy/fragile for a fast hook (same
 #     rationale kyln uses to keep its p4d suite out of the hook). Run it locally
 #     with: maturin develop -m content-addressable-py/Cargo.toml && pytest
-# The `doc` job IS mirrored below (rustdoc is cheap).
+# The `doc` and `leaf-deps` jobs ARE mirrored below (rustdoc is cheap;
+# `leaf-deps` only reads `cargo metadata`, so it is fast and offline — true
+# parity, not an exception).
 set -euo pipefail
 
 echo "==> cargo fmt --check"
@@ -35,5 +37,11 @@ cargo test --all-features
 # hard failure so doc rot can't return (issue #9 — API-surface hygiene).
 echo "==> RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features"
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+# Mirrors the CI `leaf-deps` job: assert the published core crate's resolved
+# dependency closure is registry-only (no path/git deps) so it stays a true,
+# publishable leaf (issue #13). Reads only `cargo metadata` — fast and offline.
+echo "==> ./scripts/check-leaf-deps.sh (published core is a true leaf)"
+"$(git rev-parse --show-toplevel)/scripts/check-leaf-deps.sh"
 
 echo "pre-push checks passed."
