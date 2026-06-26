@@ -38,3 +38,7 @@ thiserror = "2"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
+# Test-only: parse the shared golden-vector file (tests/vectors.json) and drive
+# the generator that (re)materializes it. NOT a core dependency — the published
+# crate never pulls serde_json. See tests/vectors.rs and tests/gen_vectors.rs.
+serde_json = "1"
