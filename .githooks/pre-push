@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# PIPELINE PARITY: mirrors .github/workflows/ci.yml.
-# When editing this file, verify it still matches the CI pipeline (same
-# fmt/clippy/test steps). This hook is the local equivalent of the CI gates;
-# do not bypass it with --no-verify.
+# PIPELINE PARITY: mirrors the cargo fmt/clippy/test jobs in
+# .github/workflows/ci.yml. When editing this file, verify it still matches the
+# CI pipeline; do not bypass it with --no-verify.
+#
+# DOCUMENTED EXCEPTION: CI also has a `python` job (maturin build + pytest for
+# the PyO3 face). That is deliberately NOT run here — building the extension
+# module on every push is too heavy/fragile for a fast hook. The Python suite is
+# CI-only (same rationale kyln uses to keep its p4d suite out of the hook). Run
+# it locally with: maturin develop -m content-addressable-py/Cargo.toml && pytest
 set -euo pipefail
 
 echo "==> cargo fmt --check"

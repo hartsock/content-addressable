@@ -2,6 +2,17 @@
 #
 # IPLD-native by decision: CIDs and the dag-cbor codec come from the
 # multiformats stack, not a homegrown implementation. See README.md.
+
+# This repo is a Cargo workspace whose ONLY default member is the core crate
+# at the repo root. The Python/PyO3 bindings live in `content-addressable-py`,
+# a separate cdylib member that is NOT in `default-members`, so a plain
+# `cargo build` / `cargo test` at the root touches only the core crate and
+# never pulls in PyO3 / the `extension-module` linkage. The py crate is built
+# by maturin (which targets its manifest explicitly).
+[workspace]
+members = ["content-addressable-py"]
+default-members = ["."]
+
 [package]
 name = "content-addressable"
 version = "0.1.0-alpha.1"
