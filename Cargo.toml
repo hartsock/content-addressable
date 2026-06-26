@@ -16,6 +16,11 @@ default-members = ["."]
 [package]
 name = "content-addressable"
 version = "0.1.0-alpha.1"
+# FROZEN policy (gate item #10, issue #9): the edition stays at 2021 and the
+# MSRV floor stays at 1.81 (inherited from the cid/multihash stack) for the
+# `0.1.x` line. A dedicated CI job pins `dtolnay/rust-toolchain@1.81` so a
+# transitive dependency can't raise the real floor silently. Bumping either is
+# an intentional, SemVer-relevant change — never a side effect of `cargo update`.
 edition = "2021"
 rust-version = "1.81"
 license = "Apache-2.0"
@@ -40,13 +45,20 @@ merkle = []
 ipld-core = { version = "0.4", features = ["serde"] }
 # Canonical dag-cbor codec (strict map ordering, definite-length, tag-42 links).
 serde_ipld_dagcbor = "0.6"
-# BLAKE3 digest (multihash code 0x1e).
+# BLAKE3 digest (multihash code 0x1e). The `^1` range stays open, but the
+# committed Cargo.lock pins blake3 to a version whose transitive deps still build
+# on the declared MSRV (1.81): blake3 >= 1.6 pulls cpufeatures 0.3, which is an
+# edition2024 crate that fails to parse on Cargo 1.81. The MSRV CI job
+# (rust-toolchain@1.81) is the guard — if a `cargo update` re-pulls a blake3 that
+# breaks the floor, that job goes red instead of the floor drifting silently.
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
-serde = { version = "1", features = ["derive"] }
+# NOTE: `serde` is intentionally NOT repeated here — the `[dependencies]` entry
+# (with the `derive` feature) is already visible to tests, doctests, and the
+# generator, so a dev-only copy was pure redundancy (issue #9 nit a).
 # Test-only: parse the shared golden-vector file (tests/vectors.json) and drive
 # the generator that (re)materializes it. NOT a core dependency — the published
 # crate never pulls serde_json. See tests/vectors.rs and tests/gen_vectors.rs.

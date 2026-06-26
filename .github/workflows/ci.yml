@@ -1,13 +1,24 @@
-# HOOK PARITY: the cargo fmt/clippy/test jobs are mirrored by .githooks/pre-push.
-# When editing those, update the push hook to match. The build/test/clippy jobs
-# run with `--all-features` so the default-OFF `merkle` feature
-# (src/merkle.rs / MerkleNode) is actually compiled and tested; the `test` job
-# additionally runs a plain `cargo test` to keep the default-feature surface
-# green and to prove `merkle` stays off by default. The `python` job below
-# (maturin + pytest for the PyO3 face) is CI-ONLY by design — building the
-# extension module is too heavy for a fast pre-push hook — so it is a documented
-# exception, the same pattern kyln uses to keep its p4d suite out of the hook.
-# The pre-push hook records this exception in its header.
+# HOOK PARITY: the cargo fmt/clippy/test/doc jobs are mirrored by
+# .githooks/pre-push. When editing those, update the push hook to match. The
+# build/test/clippy jobs run with `--all-features` so the default-OFF `merkle`
+# feature (src/merkle.rs / MerkleNode) is actually compiled and tested; the
+# `test` job additionally runs a plain `cargo test` to keep the default-feature
+# surface green and to prove `merkle` stays off by default. The `doc` job runs
+# rustdoc with `-D warnings` (`--all-features`) so a broken intra-doc link fails
+# CI — API-surface hygiene (issue #9); it is mirrored in the hook (rustdoc is
+# cheap).
+#
+# CI-ONLY jobs (documented exceptions, NOT in the hook):
+#   - `msrv` pins `dtolnay/rust-toolchain@1.81` and runs build+test so a
+#     transitive dep can't silently raise the real MSRV floor above the declared
+#     `rust-version = "1.81"` (issue #9, gate item #10). Installing a second
+#     toolchain on every push is too heavy for a fast hook, so it is CI-only —
+#     the same rationale as the `python` job. The declared floor still lives in
+#     Cargo.toml, which the hook respects implicitly.
+#   - `python` (maturin + pytest for the PyO3 face) — building the extension
+#     module is too heavy for a fast pre-push hook (the pattern kyln uses to keep
+#     its p4d suite out of the hook).
+# The pre-push hook records both exceptions in its header.
 name: CI
 
 on:
@@ -43,6 +54,26 @@ jobs:
       - name: cargo test --all-features (exercises the merkle feature)
         run: cargo test --all-features
 
+  msrv:
+    name: msrv (1.81)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pin the declared MSRV floor. If a transitive dependency starts requiring
+      # a newer Rust, THIS job fails — surfacing an MSRV bump as an intentional,
+      # SemVer-relevant change instead of a silent drift (issue #9, gate #10).
+      # These commands resolve to `default-members = ["."]` (the published core
+      # crate only); the PyO3 `content-addressable-py` member is NOT built here.
+      # Its PyO3/pythonize stack has its OWN, higher MSRV (currently 1.83) — the
+      # 1.81 floor is the contract of the LIBRARY that crates.io ships, not of
+      # the maturin-built extension. Keep this job scoped to the core crate.
+      - uses: dtolnay/rust-toolchain@1.81
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build (MSRV 1.81, core crate)
+        run: cargo build --all-targets --all-features
+      - name: cargo test (MSRV 1.81, core crate)
+        run: cargo test --all-features
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
@@ -54,6 +85,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+  doc:
+    name: doc (intra-doc links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `-D warnings` turns broken intra-doc links into a hard CI failure so doc
+      # rot can't return (issue #9 — public API surface hygiene).
+      - name: cargo doc (deny warnings)
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: "-D warnings"
 
   fmt:
     name: fmt

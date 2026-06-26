@@ -113,10 +113,9 @@ let _hex: String = id.digest_hex();        // 64-char bare-digest-hex (no prefix
 
 ## Alpha status — bytes are NOT frozen
 
-This is **`0.1.0-alpha.1`**, working toward `0.1.0`. Most of the byte/wire
-items are now **frozen** (a stability contract across the `0.1.x` line —
-changing them is a major version bump); of the 10 **"must-fix gate"** items,
-only the last two (9–10) remain open:
+This is **`0.1.0-alpha.1`**, working toward `0.1.0`. All 10 **"must-fix gate"**
+items are now **frozen** — a stability contract across the `0.1.x` line, where
+changing any of them is a major version bump:
 
 1. **SETTLED ([#3]).** The serde representation of `ContentId` is frozen: a
    dag-cbor **tag-42 link** (binary form) via the inner `Cid`'s serde, pinned
@@ -159,8 +158,24 @@ only the last two (9–10) remain open:
    **`Err(ContentError::VerificationFailed)`** on mismatch (and `Ok(())` on
    match), making `VerificationFailed` a real, tested error path. Both return
    contracts are part of the frozen `0.1.0` API surface.
-9. The public re-export surface from the crate root.
-10. MSRV floor and edition policy.
+9. **SETTLED ([#9]).** The **public crate-root re-export surface** is frozen and
+   minimal: `ContentId`, `ContentAddressable`, `ContentError`, and the
+   `canonical` module (its functions reached as `canonical::to_canonical_dagcbor`
+   etc., **not** re-exported at the root). The codec/hash codes
+   `DAG_CBOR_CODEC` / `BLAKE3_HASH_CODE` were **demoted off the crate root**
+   (still `pub` in `content_id`) so promoting their numeric codes to the root
+   doesn't signal a permanence gate item #3 hasn't committed to;
+   `BLAKE3_DIGEST_LEN` stays private. `MerkleNode` is re-exported only under the
+   experimental `merkle` feature. Removing or narrowing any frozen export after
+   `0.1.0` is a major bump; *adding* one is allowed additively. See the
+   crate-root docs (`src/lib.rs`).
+10. **SETTLED ([#9]).** **MSRV `1.81`** (inherited from the cid/multihash stack)
+    and **edition `2021`** are frozen for the `0.1.x` line, marked as policy in
+    `Cargo.toml`. A dedicated CI job pins `dtolnay/rust-toolchain@1.81`
+    (build + test) so a transitive dependency can't raise the real floor while
+    CI stays green; `Cargo.lock` is committed for reproducible resolution across
+    that job and the byte-contract tests. Bumping the MSRV or edition is an
+    intentional, SemVer-relevant change, never a silent `cargo update` effect.
 
 **SETTLED for the freeze ([#10]).** The **no-rehash digest bridge** —
 `ContentId::from_blake3_content_digest([u8; 32])` — is part of the byte
@@ -176,11 +191,14 @@ existing bytes change); the wrapping rule downstream BLAKE3-native systems
 [#6]: https://github.com/hartsock/content-addressable/issues/6
 [#7]: https://github.com/hartsock/content-addressable/issues/7
 [#8]: https://github.com/hartsock/content-addressable/issues/8
+[#9]: https://github.com/hartsock/content-addressable/issues/9
 [#10]: https://github.com/hartsock/content-addressable/issues/10
 
-Until `0.1.0`, **do not treat alpha output as a durable on-disk format** — the
-remaining open items (9–10: the crate-root re-export surface and the
-MSRV/edition policy) may still move.
+With all 10 gate items settled the byte/wire and API/MSRV contracts are frozen
+for the `0.1.x` line; the remaining work toward `0.1.0` is the Merkle
+conformance vectors (the `merkle` feature's bytes are still NON-frozen — see
+below) and the final release cut. Treat the *frozen* surfaces as durable; do
+**not** yet depend on the experimental `merkle` node bytes.
 
 ### The `merkle` feature — experimental, bytes NOT frozen
 

@@ -71,9 +71,55 @@
 //!   frozen `0.1.0` API surface — distinct from, but alongside, the byte/wire
 //!   gate.
 //!
-//! The remaining open gate items (the crate-root re-export surface, MSRV/edition
-//! policy) keep the crate from being declared `0.1.0` yet. The frozen bytes are
-//! pinned by `tests/vectors.json` and the in-crate golden tests.
+//! The last two byte/wire gate items are now also settled: the **crate-root
+//! re-export surface** and the **MSRV/edition policy** (gate items #9/#10 — see
+//! the [public API surface](#public-api-surface-frozen-at-010) section below).
+//! The frozen bytes are pinned by `tests/vectors.json` and the in-crate golden
+//! tests.
+//!
+//! # Public API surface (FROZEN at 0.1.0)
+//!
+//! The crate-root re-export surface is itself a **stability contract** for the
+//! `0.1.x` line, just like the wire bytes (gate item #9). Once `0.1.0` ships,
+//! removing or narrowing any of these is a **SemVer-breaking** event (a major
+//! bump); *adding* a new re-export is allowed additively. The frozen crate-root
+//! surface is exactly:
+//!
+//! - [`ContentId`] — the self-certifying identity (re-exported from
+//!   [`content_id`]).
+//! - [`ContentAddressable`] — the one trait a type implements (from
+//!   [`trait_def`]).
+//! - [`ContentError`] — the crate's error type (from [`error`]).
+//! - the [`canonical`] module — `to_canonical_dagcbor` /
+//!   `from_canonical_dagcbor` are reached as [`canonical::to_canonical_dagcbor`]
+//!   etc., **not** re-exported at the root (one name per function, matching the
+//!   doctests above and the PyO3 face).
+//! - [`MerkleNode`] — re-exported **only** when the default-off, experimental
+//!   `merkle` feature is enabled; its bytes are not yet frozen (see [`merkle`]).
+//!
+//! The codec/hash codes [`DAG_CBOR_CODEC`](content_id::DAG_CBOR_CODEC) /
+//! [`BLAKE3_HASH_CODE`](content_id::BLAKE3_HASH_CODE) stay `pub` inside
+//! [`content_id`] (so `content_addressable::content_id::DAG_CBOR_CODEC`
+//! resolves) but are **deliberately not re-exported at the crate root**:
+//! promoting their numeric codes to the root would signal a permanence the
+//! crate has not committed to, and the conservative default at a freeze is the
+//! smaller surface. `BLAKE3_DIGEST_LEN` stays private. The newer public items
+//! ([`ContentId::from_canonical_bytes_checked`], [`ContentId::digest_bytes`],
+//! [`ContentId::digest_hex`], [`ContentId::from_blake3_content_digest`],
+//! [`ContentAddressable::ensure_content_id`]) are intentional and individually
+//! documented at their definitions.
+//!
+//! # MSRV / edition policy (FROZEN at 0.1.0)
+//!
+//! - **MSRV: Rust `1.81`** (gate item #10). The floor is inherited from the
+//!   `cid` / `multihash` stack. It is declared as `rust-version = "1.81"` in
+//!   `Cargo.toml` and pinned by a dedicated CI job (`dtolnay/rust-toolchain@1.81`,
+//!   build + test) so a transitive dependency cannot raise the real floor while
+//!   CI stays green. A bump is an **intentional, documented, SemVer-relevant**
+//!   change, never a silent side effect of `cargo update`.
+//! - **Edition: `2021`** (gate item #10). The crate stays on the 2021 edition
+//!   for the `0.1.x` line; an edition jump is a deliberate minor/major decision,
+//!   not an alpha change.
 
 #![warn(missing_docs)]
 
@@ -84,7 +130,12 @@ pub mod error;
 pub mod merkle;
 pub mod trait_def;
 
-pub use content_id::{ContentId, BLAKE3_HASH_CODE, DAG_CBOR_CODEC};
+// FROZEN crate-root re-export surface (gate item #9) — see the "Public API
+// surface (FROZEN at 0.1.0)" section in the crate docs above. Keep this set
+// minimal and explicit: removing or narrowing an entry is a major version bump.
+// The codec/hash consts (DAG_CBOR_CODEC / BLAKE3_HASH_CODE) are intentionally
+// NOT re-exported here; they stay reachable via `content_id::`.
+pub use content_id::ContentId;
 pub use error::ContentError;
 #[cfg(feature = "merkle")]
 pub use merkle::MerkleNode;
@@ -93,6 +144,10 @@ pub use trait_def::ContentAddressable;
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The codec/hash codes are no longer re-exported at the crate root (gate
+    // item #9: smaller frozen surface). The cid-shape test reaches them via the
+    // `content_id` module, where they remain `pub`.
+    use content_id::{BLAKE3_HASH_CODE, DAG_CBOR_CODEC};
     use ipld_core::cid::Version;
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;

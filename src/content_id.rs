@@ -252,13 +252,14 @@ impl ContentId {
     /// This is a deliberately narrow, *unchecked* escape hatch for
     /// **BLAKE3-native upstreams** that have already hashed their content and
     /// hold only the 32-byte digest (a signature, an address) — not the
-    /// original canonical bytes. For them, [`from_canonical_bytes`] is not just
+    /// original canonical bytes. For them,
+    /// [`from_canonical_bytes`](Self::from_canonical_bytes) is not just
     /// wasteful, it is *impossible*: there are no bytes left to hash. This
     /// constructor takes the digest they already have and wraps it directly:
     /// `Multihash::wrap(0x1e, digest)` → `Cid::new_v1(0x71, mh)`. No BLAKE3
     /// step runs, and the result is byte-identical to what
-    /// [`from_canonical_bytes`] would have produced *had the caller hashed the
-    /// real content correctly*.
+    /// [`from_canonical_bytes`](Self::from_canonical_bytes) would have produced
+    /// *had the caller hashed the real content correctly*.
     ///
     /// The `[u8; 32]` argument makes the 32-byte length a **compile-time**
     /// guarantee: it is impossible to call with a wrong-length digest, so no
@@ -271,7 +272,8 @@ impl ContentId {
     /// This constructor **does not hash and does not canonicalize**. It trusts
     /// the caller completely. By calling it you **assert** that `digest` is
     /// exactly `BLAKE3` over the value's **canonical dag-cbor** bytes — the same
-    /// input domain [`from_canonical_bytes`] would hash.
+    /// input domain [`from_canonical_bytes`](Self::from_canonical_bytes) would
+    /// hash.
     ///
     /// If that assertion is false — the digest was computed over non-canonical
     /// bytes, over a different encoding, with a different hash, or is simply
@@ -279,8 +281,9 @@ impl ContentId {
     /// actually hashed**. Such an id is silently wrong: there is no error, and
     /// verifying it against the real bytes returns `Ok(false)`, never an `Err`.
     ///
-    /// **If you have the content bytes, use [`from_canonical_bytes`] instead** —
-    /// it hashes them for you and cannot be wrong this way. Do *not* reach for
+    /// **If you have the content bytes, use
+    /// [`from_canonical_bytes`](Self::from_canonical_bytes) instead** — it
+    /// hashes them for you and cannot be wrong this way. Do *not* reach for
     /// this constructor merely to avoid a hash; reach for it only when you
     /// genuinely hold a precomputed, canonical-dag-cbor BLAKE3 digest and the
     /// content itself is gone.
@@ -451,7 +454,7 @@ impl FromStr for ContentId {
     /// Parse an id from a multibase CID string.
     ///
     /// The frozen contract is narrow: `FromStr` is the **inverse of
-    /// [`Display`]** for the base32-lower form, and that round-trip
+    /// [`Display`](fmt::Display)** for the base32-lower form, and that round-trip
     /// (`id.to_string().parse() == Ok(id)`) is the part pinned by the
     /// [presentation contract](ContentId#presentation-contract-frozen-at-010).
     /// As a **convenience (not a contract)** this also accepts other valid
