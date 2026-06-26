@@ -58,6 +58,37 @@ impl PyContentId {
         }
     }
 
+    /// Wrap an **already-computed** 32-byte BLAKE3 content digest as a
+    /// `ContentId` — **without hashing it again**.
+    ///
+    /// This is an UNCHECKED escape hatch for BLAKE3-native upstreams that
+    /// already hashed their content and hold only the 32-byte digest (a
+    /// signature, an address), not the original canonical bytes. It wraps the
+    /// digest directly (BLAKE3 multihash `0x1e` -> CIDv1 dag-cbor `0x71`); no
+    /// BLAKE3 step runs.
+    ///
+    /// WARNING: the caller asserts `digest` is exactly BLAKE3 over the value's
+    /// canonical dag-cbor bytes. This does NOT hash and does NOT canonicalize.
+    /// A digest computed any other way produces a `ContentId` that names
+    /// content nothing actually hashed. If you have the content bytes, use
+    /// [`ContentId.from_canonical_bytes`] instead — it hashes them for you.
+    ///
+    /// Raises `ValueError` if `digest` is not exactly 32 bytes. (Unlike the
+    /// Rust core's `[u8; 32]` argument, a Python `bytes` carries no
+    /// compile-time length guarantee, so the length is validated here.)
+    #[staticmethod]
+    fn from_blake3_content_digest(digest: &[u8]) -> PyResult<Self> {
+        let arr: [u8; 32] = digest.try_into().map_err(|_| {
+            PyValueError::new_err(format!(
+                "BLAKE3 content digest must be exactly 32 bytes, got {}",
+                digest.len()
+            ))
+        })?;
+        Ok(PyContentId {
+            inner: CoreContentId::from_blake3_content_digest(arr),
+        })
+    }
+
     /// Parse a `ContentId` from its canonical CID binary form.
     ///
     /// Raises `ValueError` if the bytes are not a valid CID.

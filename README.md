@@ -28,6 +28,21 @@ wider content-addressed world (IPFS, IPLD, libp2p, and friends):
 The CID is built explicitly: `BLAKE3(bytes)` → `Multihash::wrap(0x1e, digest)`
 → `Cid::new_v1(0x71, mh)`.
 
+`ContentId` exposes two mint sites for this shape:
+
+- **`from_canonical_bytes(&[u8])`** — the normal door: hashes the canonical
+  dag-cbor bytes for you.
+- **`from_blake3_content_digest([u8; 32])`** — a guarded, **no-rehash** escape
+  hatch for BLAKE3-native upstreams that already hashed their content and hold
+  only the 32-byte digest (a signature, an address), not the original bytes. It
+  wraps the digest directly, with **no second hash** (the wrapping rule is the
+  *same frozen tail* both doors share, so they emit byte-identical CIDs for the
+  same digest). It is **unchecked**: the caller asserts the digest is BLAKE3
+  over canonical dag-cbor; a digest computed any other way names content nothing
+  hashed. If you have the bytes, use `from_canonical_bytes`. (The Python face
+  mirrors this as `ContentId.from_blake3_content_digest(bytes)`, validating the
+  32-byte length and raising `ValueError` otherwise.)
+
 [`Cid`]: https://docs.rs/cid
 [`cid`]: https://crates.io/crates/cid
 [`ipld-core`]: https://crates.io/crates/ipld-core
@@ -85,8 +100,17 @@ open:
 9. The public re-export surface from the crate root.
 10. MSRV floor and edition policy.
 
+**SETTLED for the freeze ([#10]).** The **no-rehash digest bridge** —
+`ContentId::from_blake3_content_digest([u8; 32])` — is part of the byte
+contract: it emits the *same* frozen CID shape (`0x71` / `0x1e` / 32-byte
+digest) as `from_canonical_bytes`, sharing one private wrapping site so the two
+doors are byte-identical for the same digest. It is an additive constructor (no
+existing bytes change); the wrapping rule downstream BLAKE3-native systems
+(e.g. kyln #303, kyln-lore) persist and link against is now fixed for `0.1.x`.
+
 [#3]: https://github.com/hartsock/content-addressable/issues/3
 [#4]: https://github.com/hartsock/content-addressable/issues/4
+[#10]: https://github.com/hartsock/content-addressable/issues/10
 
 Until `0.1.0`, **do not treat alpha output as a durable on-disk format** — the
 remaining open items (6–10) may still move.

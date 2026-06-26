@@ -189,6 +189,68 @@ def test_content_id_matches_independent_blake3_cidv1():
 
 
 # --------------------------------------------------------------------------- #
+# No-rehash digest bridge (issue #10)
+# --------------------------------------------------------------------------- #
+
+
+def test_from_blake3_content_digest_wraps_without_rehashing():
+    """ContentId.from_blake3_content_digest(d) wraps d as-is — no second hash.
+
+    For a non-trivial 32-byte digest, wrapping it must differ from
+    from_canonical_bytes(d) (which hashes d again). Proves the no-rehash door
+    does NOT re-hash. Also checks it matches content_id(...) of the same bytes,
+    which canonicalizes-then-hashes — a third, different path.
+    """
+    d = bytes(range(1, 33))  # [1, 2, ..., 32], a non-trivial digest
+    assert len(d) == 32
+
+    wrapped = ContentId.from_blake3_content_digest(d)
+
+    # The wrapped CID carries the digest verbatim: the trailing 32 bytes of the
+    # CIDv1 binary form are exactly d.
+    assert wrapped.to_bytes()[-32:] == d
+    # CID shape: 0x01 (v1) 0x71 (dag-cbor) 0x1e (BLAKE3) 0x20 (len 32) || d
+    assert wrapped.to_bytes() == bytes([0x01, 0x71, 0x1E, 0x20]) + d
+
+    # The no-rehash invariant: hashing d again (from_canonical_bytes) MUST
+    # produce a different id.
+    rehashed = ContentId.from_canonical_bytes(d)
+    assert wrapped != rehashed
+
+    # And it differs from content_id(d), which canonicalizes d to dag-cbor then
+    # hashes — yet another distinct path that must not collide with the wrap.
+    assert wrapped != content_id(d)
+
+    # Round-trips through its own byte form.
+    assert ContentId.from_bytes(wrapped.to_bytes()) == wrapped
+
+
+def test_from_blake3_content_digest_converges_with_from_canonical_bytes():
+    """from_blake3_content_digest(blake3(x)) == from_canonical_bytes(x).
+
+    When the caller hashes the real content correctly, the no-rehash door lands
+    on exactly the id the hashing door produces. Skipped if no host BLAKE3.
+    """
+    content = b"\x00\x01\x02 some canonical dag-cbor bytes"
+    digest = _blake3_digest(content)
+    if digest is None:
+        pytest.skip("no BLAKE3 implementation available (need py3.13+ or `blake3`)")
+    assert len(digest) == 32
+
+    via_digest = ContentId.from_blake3_content_digest(digest)
+    via_hash = ContentId.from_canonical_bytes(content)
+    assert via_digest == via_hash
+    assert str(via_digest) == str(via_hash)
+
+
+def test_from_blake3_content_digest_rejects_wrong_length():
+    """A Python bytes of the wrong length raises ValueError (no [u8;32] guard)."""
+    for bad in (b"", b"too short", bytes(31), bytes(33), bytes(64)):
+        with pytest.raises(ValueError):
+            ContentId.from_blake3_content_digest(bad)
+
+
+# --------------------------------------------------------------------------- #
 # dag-cbor encode/decode round-trip
 # --------------------------------------------------------------------------- #
 
