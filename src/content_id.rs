@@ -136,9 +136,11 @@ const BLAKE3_DIGEST_LEN: usize = 32;
 pub struct ContentId(Cid);
 
 impl ContentId {
-    /// Compute the content id of already-canonical bytes.
+    /// Compute the content id of bytes that **are already canonical dag-cbor**.
     ///
-    /// The pipeline is, end to end:
+    /// This is the crate's fast, unchecked minting primitive — the hot path that
+    /// [`ContentAddressable::content_id`](crate::ContentAddressable::content_id)
+    /// leans on. The pipeline is, end to end:
     ///
     /// 1. `digest = BLAKE3(bytes)` — a 32-byte hash.
     /// 2. `mh = Multihash::wrap(0x1e, digest)` — tag the digest with the
@@ -146,9 +148,47 @@ impl ContentId {
     /// 3. `cid = Cid::new_v1(0x71, mh)` — a CIDv1 declaring the bytes are
     ///    dag-cbor.
     ///
-    /// The input is assumed to already be canonical dag-cbor (typically the
-    /// output of [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor)).
-    /// This function does not re-canonicalize; it only hashes.
+    /// # Precondition — CALLER MUST PASS CANONICAL DAG-CBOR
+    ///
+    /// **The bytes you pass MUST already be canonical dag-cbor** — typically the
+    /// output of
+    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor) or, for a
+    /// whole value, [`ContentAddressable::canonical_form`](crate::ContentAddressable::canonical_form).
+    /// This function **does not re-canonicalize and does not validate**; it only
+    /// hashes whatever it is handed and stamps the result with the `0x71`
+    /// (dag-cbor) codec.
+    ///
+    /// Passing **non-canonical** CBOR (wrong map-key order, indefinite-length
+    /// items, non-smallest integers), hand-rolled CBOR, or arbitrary non-dag-cbor
+    /// bytes is a **logic error, not handled at runtime**: you get back a
+    /// perfectly valid-looking [`ContentId`] whose `0x71` codec is a **lie** —
+    /// the bytes it names are not canonical dag-cbor. A second party who
+    /// canonicalizes "the same value" will compute a **different** id, and
+    /// nothing here will have told you. This is silent and by design (validation
+    /// is not free, so it is opt-in — see below), so honor the precondition.
+    ///
+    /// # Which door to use
+    ///
+    /// - **Have a value?** Use
+    ///   [`ContentAddressable::content_id`](crate::ContentAddressable::content_id)
+    ///   (the documented default). It canonicalizes *then* hashes, so it can
+    ///   never hand this function non-canonical bytes — the precondition holds by
+    ///   construction and there is no per-call validation tax on the safe path.
+    /// - **Have bytes you canonicalized yourself** (via
+    ///   [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor))?
+    ///   This primitive is correct and fastest.
+    /// - **Have foreign / untrusted bytes you did *not* canonicalize?** Use the
+    ///   checked sibling
+    ///   [`from_canonical_bytes_checked`](Self::from_canonical_bytes_checked),
+    ///   which re-encodes and rejects non-canonical input with a typed error.
+    ///
+    /// # Naming (FROZEN at 0.1.0)
+    ///
+    /// This door keeps the name `from_canonical_bytes` (the fast primitive) and
+    /// is **not** renamed to `_unchecked`; the checked variant is the explicitly
+    /// suffixed [`from_canonical_bytes_checked`](Self::from_canonical_bytes_checked).
+    /// This pairing is a frozen `0.1.0` decision (README gate item #6) — it
+    /// cannot change cheaply after `0.1.0`.
     ///
     /// # Panics
     ///
@@ -158,6 +198,52 @@ impl ContentId {
     pub fn from_canonical_bytes(bytes: &[u8]) -> Self {
         let digest = blake3::hash(bytes);
         Self::wrap_blake3_digest(*digest.as_bytes())
+    }
+
+    /// Compute the content id of bytes, **first verifying they are canonical
+    /// dag-cbor**.
+    ///
+    /// This is the opt-in, *checked* sibling of
+    /// [`from_canonical_bytes`](Self::from_canonical_bytes). It is for callers
+    /// minting an id from bytes they did **not** canonicalize themselves
+    /// (foreign, untrusted, hand-rolled, or stored input) and who therefore
+    /// cannot rely on the precondition by construction. It closes the silent
+    /// integrity hole the fast primitive leaves open, at the cost of a decode +
+    /// re-encode + compare on every call — pay it only when byte provenance is
+    /// not yours.
+    ///
+    /// The check is a **round-trip**: decode the bytes as an
+    /// [`Ipld`](ipld_core::ipld::Ipld) value, re-encode that value via
+    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor), and
+    /// require the re-encoding to equal the input byte-for-byte. Because the
+    /// dag-cbor codec is canonical by construction (strict key order,
+    /// definite-length, smallest-form integers — see
+    /// [`canonical`](crate::canonical)), equality proves the input was *already*
+    /// the unique canonical encoding of that value. On success the id is computed
+    /// over the (canonical) input bytes, so it is **byte-identical** to what
+    /// [`from_canonical_bytes`](Self::from_canonical_bytes) would return for the
+    /// same bytes — the check changes the fallibility, never the emitted id.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContentError::DecodingError`] if `bytes` are not dag-cbor at all.
+    /// - [`ContentError::NonCanonical`] if `bytes` decode but are *not* the
+    ///   canonical encoding (wrong map-key order, indefinite-length items,
+    ///   non-smallest integers, …) — i.e. re-encoding differs from the input.
+    /// - [`ContentError::EncodingError`] in the unlikely event the decoded value
+    ///   cannot be re-encoded.
+    pub fn from_canonical_bytes_checked(bytes: &[u8]) -> Result<Self, ContentError> {
+        // 1. Decode to the generic Ipld value. Non-dag-cbor garbage fails here.
+        let value: ipld_core::ipld::Ipld = crate::canonical::from_canonical_dagcbor(bytes)?;
+        // 2. Re-encode canonically. The codec emits the *unique* canonical form.
+        let reencoded = crate::canonical::to_canonical_dagcbor(&value)?;
+        // 3. The input was canonical iff it equals its own canonical re-encoding.
+        if reencoded != bytes {
+            return Err(ContentError::NonCanonical);
+        }
+        // The bytes are proven canonical: minting over them is identical to the
+        // unchecked primitive, so reuse it (no second decode/encode).
+        Ok(Self::from_canonical_bytes(bytes))
     }
 
     /// Wrap an **already-computed** 32-byte BLAKE3 content digest as a
@@ -325,6 +411,7 @@ impl ContentId {
             .map(ContentId)
             .map_err(|e| ContentError::InvalidCid {
                 reason: e.to_string(),
+                source: Box::new(e),
             })
     }
 }
@@ -377,6 +464,7 @@ impl FromStr for ContentId {
             .map(ContentId)
             .map_err(|e| ContentError::InvalidCid {
                 reason: e.to_string(),
+                source: Box::new(e),
             })
     }
 }
@@ -707,5 +795,171 @@ mod presentation_tests {
         );
         // Concretely: the 4-byte CIDv1/dag-cbor/BLAKE3/len-32 prefix, then digest.
         assert_eq!(cid_bytes_hex, format!("01711e20{}", id.digest_hex()));
+    }
+}
+
+#[cfg(test)]
+mod checked_input_tests {
+    //! Tests for [`ContentId::from_canonical_bytes_checked`] (issue #5): the
+    //! opt-in, round-trip-validating sibling of the fast `from_canonical_bytes`
+    //! primitive. They pin the four behaviors the issue's AC names: (a) canonical
+    //! bytes accepted and yielding the *same* id as the unchecked door, (b)
+    //! non-canonical-but-valid CBOR rejected, (c) non-dag-cbor garbage rejected,
+    //! and (d) a regression test documenting that the *unchecked* primitive still
+    //! happily mints an id for non-canonical bytes (the precondition is real and
+    //! unenforced by design).
+
+    use super::ContentId;
+    use crate::canonical::to_canonical_dagcbor;
+    use crate::error::ContentError;
+
+    #[test]
+    fn checked_accepts_canonical_bytes_and_matches_the_unchecked_door() {
+        // The always-canonical path: canonicalize a value, then both doors must
+        // agree on the id (the check changes fallibility, never the bytes).
+        for value in [
+            &serde_json::json!({}),
+            &serde_json::json!({"alpha": 1, "zeta": 26}),
+            &serde_json::json!({"name": "hello", "n": [1, 2, 3], "nested": {"a": 1}}),
+            &serde_json::json!([1, "two", [3, 4], null]),
+        ] {
+            // Drive canonical bytes through Ipld so the encoding is the codec's
+            // canonical form, then assert the two doors converge.
+            let ipld: ipld_core::ipld::Ipld =
+                serde_json::from_value((*value).clone()).expect("json -> ipld");
+            let canonical = to_canonical_dagcbor(&ipld).expect("encode canonical");
+
+            let via_checked =
+                ContentId::from_canonical_bytes_checked(&canonical).expect("canonical accepted");
+            let via_unchecked = ContentId::from_canonical_bytes(&canonical);
+            assert_eq!(
+                via_checked, via_unchecked,
+                "checked(canonical) must equal the unchecked id for the same bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn always_canonical_path_equals_from_canonical_bytes_of_to_canonical_dagcbor() {
+        // The exact identity the issue calls out: the always-canonical path
+        // (to_canonical_dagcbor then mint) and the checked door produce the same
+        // id, and that id is from_canonical_bytes(to_canonical_dagcbor(x)).
+        let ipld: ipld_core::ipld::Ipld = serde_json::from_value(serde_json::json!(
+            {"alpha": 1, "zeta": 26, "list": [true, false, null]}
+        ))
+        .expect("json -> ipld");
+
+        let canonical = to_canonical_dagcbor(&ipld).expect("encode canonical");
+        let from_unchecked = ContentId::from_canonical_bytes(&canonical);
+        let from_checked =
+            ContentId::from_canonical_bytes_checked(&canonical).expect("canonical accepted");
+
+        assert_eq!(
+            from_checked, from_unchecked,
+            "from_canonical_bytes_checked(to_canonical_dagcbor(x)) == \
+             from_canonical_bytes(to_canonical_dagcbor(x))"
+        );
+    }
+
+    #[test]
+    fn checked_rejects_non_canonical_but_valid_cbor() {
+        // A map with two string keys encoded in NON-canonical (descending) key
+        // order. dag-cbor canonical order is by length-then-bytewise, so {"a",
+        // "bb"} canonical is a2 [a] .. [bb]; we hand-build the reverse order.
+        // Hand-built CBOR:
+        //   a2                      map(2)
+        //   62 6262                 text(2) "bb"   <- emitted FIRST (non-canonical)
+        //   01                      1
+        //   61 61                   text(1) "a"
+        //   02                      2
+        let non_canonical = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
+
+        // Sanity: it IS valid CBOR (decodes fine), so this exercises the
+        // re-encode-compare path, not the decode path.
+        let decoded: ipld_core::ipld::Ipld =
+            crate::canonical::from_canonical_dagcbor(&non_canonical)
+                .expect("non-canonical bytes are still valid CBOR and decode");
+        // And its canonical re-encoding genuinely differs (proving our fixture is
+        // really non-canonical, not an accidental canonical form).
+        let recanon = to_canonical_dagcbor(&decoded).expect("re-encode");
+        assert_ne!(
+            &recanon[..],
+            &non_canonical[..],
+            "fixture must actually be non-canonical"
+        );
+
+        let err = ContentId::from_canonical_bytes_checked(&non_canonical)
+            .expect_err("non-canonical CBOR must be rejected");
+        assert!(
+            matches!(err, ContentError::NonCanonical),
+            "non-canonical valid CBOR must map to ContentError::NonCanonical, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn checked_rejects_indefinite_length_cbor() {
+        // An indefinite-length CBOR array (0x9f .. 0xff) is valid CBOR but
+        // forbidden in canonical dag-cbor (definite-length only). dag-cbor's
+        // decoder may already refuse it; either way the checked door must error
+        // (decode failure OR non-canonical), never silently mint an id.
+        //   9f        array(*)  (indefinite)
+        //   01 02 03  1, 2, 3
+        //   ff        break
+        let indefinite = [0x9f, 0x01, 0x02, 0x03, 0xff];
+        let err = ContentId::from_canonical_bytes_checked(&indefinite)
+            .expect_err("indefinite-length CBOR must be rejected");
+        assert!(
+            matches!(
+                err,
+                ContentError::NonCanonical | ContentError::DecodingError { .. }
+            ),
+            "indefinite-length CBOR must be rejected (NonCanonical or DecodingError), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn checked_rejects_non_dagcbor_garbage() {
+        // Arbitrary non-CBOR bytes must fail at the decode step.
+        let garbage = [0xff, 0xff, 0xff, 0xff];
+        let err = ContentId::from_canonical_bytes_checked(&garbage)
+            .expect_err("non-dag-cbor garbage must be rejected");
+        assert!(
+            matches!(err, ContentError::DecodingError { .. }),
+            "non-dag-cbor garbage must map to ContentError::DecodingError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn unchecked_still_mints_an_id_for_non_canonical_bytes() {
+        // REGRESSION / documentation test (issue #5 AC item d): the FAST,
+        // unchecked primitive does NOT validate — it mints a (misleading) id even
+        // for non-canonical bytes. This pins that the precondition is real and
+        // unenforced by design: the unchecked door succeeds where the checked one
+        // refuses, and the two ids necessarily differ (the unchecked id hashes
+        // the non-canonical bytes; the canonical bytes hash to something else).
+        let non_canonical = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
+
+        // Unchecked: succeeds, no error, no panic — mints over the raw bytes.
+        let misleading = ContentId::from_canonical_bytes(&non_canonical);
+        assert_eq!(
+            misleading.digest_bytes(),
+            *blake3::hash(&non_canonical).as_bytes(),
+            "the unchecked door hashes exactly the bytes it was given"
+        );
+
+        // Checked: refuses.
+        assert!(ContentId::from_canonical_bytes_checked(&non_canonical).is_err());
+
+        // The misleading id differs from the id of the *canonical* form of the
+        // same value — the silent integrity hole the precondition warns about.
+        let decoded: ipld_core::ipld::Ipld =
+            crate::canonical::from_canonical_dagcbor(&non_canonical).expect("valid CBOR");
+        let canonical = to_canonical_dagcbor(&decoded).expect("re-encode");
+        let honest = ContentId::from_canonical_bytes(&canonical);
+        assert_ne!(
+            misleading, honest,
+            "minting over non-canonical bytes names a different id than the \
+             canonical form would — exactly the hazard from_canonical_bytes warns of"
+        );
     }
 }

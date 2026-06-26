@@ -40,7 +40,12 @@ use crate::error::ContentError;
 /// as dag-cbor (for example, a float that dag-cbor forbids, or an allocation
 /// failure).
 pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentError> {
-    serde_ipld_dagcbor::to_vec(value).map_err(|source| ContentError::EncodingError { source })
+    // Box the concrete `serde_ipld_dagcbor::EncodeError<…>` as a `dyn Error` so
+    // the codec crate's generic does not leak into the frozen public signature
+    // of `ContentError::EncodingError` (see error.rs freeze decisions).
+    serde_ipld_dagcbor::to_vec(value).map_err(|source| ContentError::EncodingError {
+        source: Box::new(source),
+    })
 }
 
 /// Decode a value from canonical dag-cbor bytes.
@@ -50,5 +55,10 @@ pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentE
 /// Returns [`ContentError::DecodingError`] if the bytes are not valid canonical
 /// dag-cbor for the target type.
 pub fn from_canonical_dagcbor<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ContentError> {
-    serde_ipld_dagcbor::from_slice(bytes).map_err(|source| ContentError::DecodingError { source })
+    // Box the concrete `serde_ipld_dagcbor::DecodeError<…>` as a `dyn Error` so
+    // the codec crate's generic does not leak into the frozen public signature
+    // of `ContentError::DecodingError` (see error.rs freeze decisions).
+    serde_ipld_dagcbor::from_slice(bytes).map_err(|source| ContentError::DecodingError {
+        source: Box::new(source),
+    })
 }
