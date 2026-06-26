@@ -18,15 +18,25 @@ use crate::error::ContentError;
 /// Multicodec code for the `dag-cbor` content type (`0x71`).
 ///
 /// This is the codec field of every [`ContentId`]'s CID: it declares that the
-/// bytes the id names are canonical dag-cbor.
+/// bytes the id names are canonical dag-cbor. **Frozen** for the `0.1.x` line —
+/// see the [`ContentId` CID-parameters contract](ContentId#cid-parameters-frozen-at-010).
 pub const DAG_CBOR_CODEC: u64 = 0x71;
 
 /// Multihash code for BLAKE3 (`0x1e`).
 ///
 /// This is the hash function field of every [`ContentId`]'s multihash.
+/// **Frozen** for the `0.1.x` line — see the
+/// [`ContentId` CID-parameters contract](ContentId#cid-parameters-frozen-at-010).
 pub const BLAKE3_HASH_CODE: u64 = 0x1e;
 
 /// Length of a BLAKE3 digest in bytes (256 bits).
+///
+/// Part of the **frozen** v1 CID-parameter contract: every [`ContentId`]'s
+/// multihash carries exactly 32 digest bytes. Kept private (no new public
+/// surface, gate item 9); the value is asserted by the CID-shape tests and is
+/// implied on the wire by the `0x20` multihash length prefix. Changing it is a
+/// major version bump — see the
+/// [`ContentId` CID-parameters contract](ContentId#cid-parameters-frozen-at-010).
 const BLAKE3_DIGEST_LEN: usize = 32;
 
 /// The self-certifying identity of a value.
@@ -39,17 +49,55 @@ const BLAKE3_DIGEST_LEN: usize = 32;
 /// `ContentId` usable as a key in ordered maps and sets with a stable,
 /// content-derived sort.
 ///
-/// # Serde representation (NOT FROZEN)
+/// # CID parameters (FROZEN at 0.1.0)
 ///
-/// `ContentId` serializes as its inner [`Cid`], i.e. as a dag-cbor **tag-42
-/// link** when written through [`serde_ipld_dagcbor`]. This is the natural IPLD
-/// encoding and makes `ContentId` fields inside other content-addressed
-/// structures behave as real links.
+/// The three fields that determine every address this crate emits are a
+/// **fixed v1 contract**, not configuration (gate items 3, 4, 5 — see
+/// `README.md`):
 ///
-/// **This exact wire representation is a "must-fix gate" item that must be
-/// settled before the `0.1.0` release.** Until then (during `0.1.0-alpha`) the
-/// bytes are explicitly *not* a stability contract and may change. Do not
-/// persist `ContentId`-bearing structures as a long-term format yet.
+/// - **CID version: `V1`** (`Cid::new_v1`). There is no v0 / agility path.
+/// - **Multicodec: `dag-cbor` (`0x71`)** — see [`DAG_CBOR_CODEC`].
+/// - **Multihash: `BLAKE3` (`0x1e`)** — see [`BLAKE3_HASH_CODE`] — over a
+///   **fixed 32-byte digest** (`BLAKE3_DIGEST_LEN`, 256 bits).
+///
+/// These values are **not selectable**. [`from_canonical_bytes`](Self::from_canonical_bytes)
+/// is the single mint site and always produces this shape. Changing the
+/// version, codec, hash function, or digest length is a **new representation =
+/// major version bump**, never a patch — every previously emitted address would
+/// become unreachable. CIDs are self-describing, so a future hash/codec can
+/// ship as a *new* representation under a *new* major without retrofitting
+/// agility now; callers needing a different shape today can wrap a raw [`Cid`]
+/// via the [`From<Cid>`](#impl-From%3CCid%3E-for-ContentId) / [`as_cid`](Self::as_cid)
+/// seam.
+///
+/// # Serde representation (FROZEN at 0.1.0)
+///
+/// `ContentId` serializes as its inner [`Cid`]. Two concrete forms exist,
+/// depending on the serializer, and **both are a stability contract across the
+/// entire `0.1.x` line** — changing either is a **major version bump**. The
+/// committed golden vectors (`tests/vectors.json`) plus the in-crate golden
+/// test pin these exact bytes so a dependency bump cannot silently perturb
+/// them:
+///
+/// - **Binary / dag-cbor form: a tag-42 link.** Through
+///   [`serde_ipld_dagcbor`] a `ContentId` is encoded as a CBOR **tag-42 link**
+///   (major-type-6 head `0xd8 0x2a`, then a byte string carrying the `0x00`
+///   multibase-identity prefix followed by the CID binary form). This is the
+///   natural IPLD encoding and makes `ContentId` fields inside other
+///   content-addressed structures behave as real links — the crate's
+///   IPLD-native thesis. See [`canonical`](crate::canonical).
+/// - **Human-readable text form: the multibase base32-lower string.**
+///   [`Display`](fmt::Display) and [`FromStr`] render/parse the inner CID's
+///   default multibase string (the `b…` base32-lower form for CIDv1). This is
+///   the canonical *text* form of an id.
+///
+/// Note on `serde_json` and other non-IPLD serializers: the bundled `cid`
+/// serde impl encodes a CID as a byte-valued newtype struct, so a `ContentId`
+/// field serialized with `serde_json` is the CID's **byte array**
+/// (`[1, 113, 30, …]`), *not* the base32 text string. That byte-array form is
+/// likewise frozen; use [`Display`](fmt::Display)/[`FromStr`] when a base32
+/// *string* is wanted. (The base32 string is the multibase text form; the JSON
+/// byte array is the same CID rendered through serde's generic byte path.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContentId(Cid);
 
@@ -143,8 +191,9 @@ impl FromStr for ContentId {
 impl Serialize for ContentId {
     /// Serialize as the inner [`Cid`], yielding a dag-cbor tag-42 link.
     ///
-    /// See the [type-level note](ContentId#serde-representation-not-frozen):
-    /// this representation is not frozen during `0.1.0-alpha`.
+    /// This representation is **frozen** for the `0.1.x` line; see the
+    /// [type-level serde contract](ContentId#serde-representation-frozen-at-010).
+    /// Changing it is a major version bump.
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
     }
@@ -152,7 +201,81 @@ impl Serialize for ContentId {
 
 impl<'de> Deserialize<'de> for ContentId {
     /// Deserialize the inner [`Cid`] from a dag-cbor tag-42 link.
+    ///
+    /// The accepted representation is **frozen** for the `0.1.x` line; see the
+    /// [type-level serde contract](ContentId#serde-representation-frozen-at-010).
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Cid::deserialize(deserializer).map(ContentId)
+    }
+}
+
+#[cfg(test)]
+mod cid_param_lock_tests {
+    //! Locks the frozen v1 CID parameters (issue #4) so they cannot drift
+    //! silently. These assertions live in the `content_id` module itself, next
+    //! to the definitions, so the freeze is self-evident at the source. They use
+    //! **literal** values (`0x71`, `0x1e`, `V1`, `32`), not the crate constants,
+    //! so an accidental edit to a `const` is caught by a failing test rather
+    //! than silently followed.
+
+    use super::{ContentId, BLAKE3_DIGEST_LEN, BLAKE3_HASH_CODE, DAG_CBOR_CODEC};
+    use ipld_core::cid::Version;
+
+    /// A freshly produced id, from the empty-map canonical dag-cbor (`0xa0`).
+    /// This is the documented fixed input also used by the embedded-link golden
+    /// and the `empty_map` conformance vector, so the three pins agree.
+    fn empty_map_id() -> ContentId {
+        ContentId::from_canonical_bytes(&[0xa0])
+    }
+
+    #[test]
+    fn cid_params_are_literally_v1_dagcbor_blake3_32() {
+        // Assert against LITERALS, not the constants: editing a `const` must
+        // break this test, not be silently followed.
+        let id = empty_map_id();
+        let cid = id.as_cid();
+        assert_eq!(cid.version(), Version::V1, "CID version is frozen at V1");
+        assert_eq!(cid.codec(), 0x71, "codec is frozen at dag-cbor (0x71)");
+        assert_eq!(
+            cid.hash().code(),
+            0x1e,
+            "multihash is frozen at BLAKE3 (0x1e)"
+        );
+        assert_eq!(
+            cid.hash().digest().len(),
+            32,
+            "BLAKE3 digest length is frozen at 32 bytes"
+        );
+    }
+
+    #[test]
+    fn frozen_constants_hold_their_documented_values() {
+        // The public/private constants must equal the frozen literals, so the
+        // doc and the re-exported surface cannot drift from the contract.
+        assert_eq!(DAG_CBOR_CODEC, 0x71);
+        assert_eq!(BLAKE3_HASH_CODE, 0x1e);
+        assert_eq!(BLAKE3_DIGEST_LEN, 32);
+    }
+
+    #[test]
+    fn cid_binary_prefix_is_frozen() {
+        // The leading bytes of the CIDv1 binary form encode the frozen shape:
+        //   0x01 = CIDv1
+        //   0x71 = multicodec dag-cbor
+        //   0x1e = multihash code BLAKE3
+        //   0x20 = digest length 32 (varint; 0x20 == 32)
+        // Pinning the prefix means the on-wire identifier head cannot drift even
+        // if the digest payload changes.
+        let bytes = empty_map_id().to_bytes();
+        assert_eq!(
+            &bytes[..4],
+            &[0x01, 0x71, 0x1e, 0x20],
+            "CIDv1/dag-cbor/BLAKE3/len-32 binary prefix is frozen"
+        );
+        assert_eq!(
+            bytes.len(),
+            4 + BLAKE3_DIGEST_LEN,
+            "CID binary form is the 4-byte prefix plus the 32-byte digest"
+        );
     }
 }

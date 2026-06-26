@@ -64,25 +64,32 @@ println!("{id}");                          // base32-lower multibase string
 
 ## Alpha status — bytes are NOT frozen
 
-This is **`0.1.0-alpha.1`**, an explicitly **non-frozen** alpha. The exact
-bytes this crate emits are **not a stability contract yet**. There is an open
-byte/wire **"must-fix gate"** with **10 items** to settle before `0.1.0`,
-including (non-exhaustive):
+This is **`0.1.0-alpha.1`**, working toward `0.1.0`. Several byte/wire items are
+now **frozen** (a stability contract across the `0.1.x` line — changing them is
+a major version bump); the rest of the **"must-fix gate"** (10 items) remains
+open:
 
-1. The frozen serde representation of `ContentId` (currently a dag-cbor tag-42
-   link via the inner `Cid`'s serde).
-2. The default multibase used by `Display` / `FromStr`.
-3. Whether the hash function (BLAKE3) and codec (dag-cbor) are fixed forever or
-   selectable.
-4. Multihash digest length policy.
-5. CID version policy (v1 only?).
+1. **SETTLED ([#3]).** The serde representation of `ContentId` is frozen: a
+   dag-cbor **tag-42 link** (binary form) via the inner `Cid`'s serde, pinned
+   by a full-byte golden test.
+2. **SETTLED — serde aspect ([#3]).** `Display` / `FromStr` use multibase
+   **base32-lower** (the `b…` CIDv1 string); this text form is frozen alongside
+   item 1.
+3. **SETTLED ([#4]).** The hash function (BLAKE3) and codec (dag-cbor) are
+   **fixed forever** for the `0.1.x` line, not selectable.
+4. **SETTLED ([#4]).** Multihash digest length is **32 bytes, fixed**.
+5. **SETTLED ([#4]).** CID version policy: **v1 only**.
 6. Behavior on non-canonical input passed to `from_canonical_bytes`.
 7. Error variant stability (`ContentError` is `#[non_exhaustive]`).
 8. Whether `verify` mismatch should ever be an `Err` vs `Ok(false)`.
 9. The public re-export surface from the crate root.
 10. MSRV floor and edition policy.
 
-Until `0.1.0`, **do not treat alpha output as a durable on-disk format.**
+[#3]: https://github.com/hartsock/content-addressable/issues/3
+[#4]: https://github.com/hartsock/content-addressable/issues/4
+
+Until `0.1.0`, **do not treat alpha output as a durable on-disk format** — the
+remaining open items (6–10) may still move.
 
 #### Byte-parity gate (`tests/vectors.json`)
 

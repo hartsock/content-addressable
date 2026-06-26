@@ -49,10 +49,15 @@
 //!
 //! ## Stability
 //!
-//! This is `0.1.0-alpha.1`: an explicitly **non-frozen** alpha. The exact
-//! bytes — especially the serde representation of [`ContentId`] — are **not a
-//! stability contract yet**. There is an open byte/wire "must-fix gate" to
-//! settle before `0.1.0`. Do not treat alpha output as a durable format.
+//! This is `0.1.0-alpha.1`, working toward `0.1.0`. Several items of the
+//! byte/wire "must-fix gate" are now **frozen**: the [`ContentId`] serde
+//! representation (binary dag-cbor tag-42 link + multibase base32-lower text
+//! form) and the CID parameters (CIDv1, dag-cbor `0x71`, BLAKE3 `0x1e`,
+//! 32-byte digest) are a stability contract across the `0.1.x` line — changing
+//! them is a major version bump. Remaining gate items (non-canonical-input
+//! behavior, error-variant stability, MSRV/edition policy, …) are still open,
+//! so the crate as a whole is not yet declared `0.1.0`. The frozen bytes are
+//! pinned by `tests/vectors.json` and the in-crate golden tests.
 
 #![warn(missing_docs)]
 
@@ -203,26 +208,81 @@ mod tests {
     }
 
     #[test]
-    fn content_id_serializes_as_dagcbor_link() {
-        // A struct holding a ContentId should encode/decode it as a tag-42
-        // link inside dag-cbor. This is the (alpha, non-frozen) serde repr.
+    fn embedded_content_id_serde_is_frozen_full_byte_golden() {
+        // FROZEN serde contract (issue #3): a struct embedding a ContentId
+        // field must serialize to the EXACT committed bytes below. This is the
+        // embedded-link case that the cross-language tests/vectors.json gate
+        // deliberately defers (its subset excludes the not-yet-frozen-at-the-
+        // time link repr); pin it here as a full-byte golden so any drift in
+        // ipld-core / serde_ipld_dagcbor / cid / blake3 fails loudly.
+        //
+        // The id is taken from the documented fixed input: the empty-map
+        // canonical dag-cbor (0xa0), the same id as the `empty_map` vector.
         #[derive(Debug, PartialEq, Serialize, Deserialize)]
         struct HasLink {
             link: ContentId,
         }
 
-        let id = sample_a().content_id().unwrap();
+        let id = ContentId::from_canonical_bytes(&[0xa0]);
+        // The fixed id agrees with the empty_map conformance vector.
+        assert_eq!(
+            id.to_string(),
+            "bafyr4ia7stf7ge5tzyrsk6tskhva7sk2erkw5jqr4t4pi5pfjglrxlw3ai",
+            "the fixed embedded id must be the empty-map ContentId (base32 string)"
+        );
+
         let value = HasLink { link: id };
-        let bytes = canonical::to_canonical_dagcbor(&value).unwrap();
-        let back: HasLink = canonical::from_canonical_dagcbor(&bytes).unwrap();
+
+        // --- dag-cbor (binary) golden -------------------------------------
+        // a1                      map(1)
+        // 64 6c696e6b             text(4) "link"
+        // d8 2a                   tag(42)  <- the IPLD link head
+        // 58 25                   bytes(37)
+        // 00                      multibase identity prefix for a binary CID
+        // 01711e20 1f94...db02    the 36-byte CIDv1 binary form
+        let dagcbor = canonical::to_canonical_dagcbor(&value).unwrap();
+        let expected_dagcbor = "a1646c696e6bd82a58250001711e201f94cbf313b3ce23257a7251ea0fc95a24556ea611e4f8f475e549971baedb02";
+        assert_eq!(
+            hex(&dagcbor),
+            expected_dagcbor,
+            "frozen dag-cbor encoding of an embedded ContentId drifted"
+        );
+        // The tag-42 link head must be present, followed by the 37-byte string
+        // (0x58 0x25) whose first byte is the 0x00 multibase-identity prefix.
+        let tag_pos = dagcbor
+            .windows(2)
+            .position(|w| w == [0xd8, 0x2a])
+            .expect("ContentId must be encoded as a dag-cbor tag-42 link");
+        assert_eq!(
+            &dagcbor[tag_pos..tag_pos + 5],
+            &[0xd8, 0x2a, 0x58, 0x25, 0x00],
+            "tag-42 head must be followed by a 37-byte string with the 0x00 prefix"
+        );
+
+        // It must still round-trip.
+        let back: HasLink = canonical::from_canonical_dagcbor(&dagcbor).unwrap();
         assert_eq!(value, back, "a ContentId field must roundtrip via dag-cbor");
 
-        // CBOR tag 42 is encoded as major-type-6 head 0xd8 0x2a. Confirm the
-        // link is actually emitted as an IPLD link, not a plain byte string.
-        assert!(
-            bytes.windows(2).any(|w| w == [0xd8, 0x2a]),
-            "ContentId must be encoded as a dag-cbor tag-42 link"
+        // --- JSON golden ---------------------------------------------------
+        // The bundled `cid` serde impl encodes a CID as a byte-valued newtype
+        // struct, so serde_json renders the embedded link as the CID's byte
+        // array, NOT the base32 string. That byte-array form is part of the
+        // frozen contract; the base32 *string* is the Display/FromStr form.
+        let json = serde_json::to_string(&value).unwrap();
+        let expected_json = "{\"link\":[1,113,30,32,31,148,203,243,19,179,206,35,37,122,114,81,234,15,201,90,36,85,110,166,17,228,248,244,117,229,73,151,27,174,219,2]}";
+        assert_eq!(
+            json, expected_json,
+            "frozen JSON encoding of an embedded ContentId drifted"
         );
+    }
+
+    /// Lowercase hex of a byte slice, for the golden assertions above.
+    fn hex(bytes: &[u8]) -> String {
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            s.push_str(&format!("{b:02x}"));
+        }
+        s
     }
 
     #[test]
