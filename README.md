@@ -182,6 +182,50 @@ Until `0.1.0`, **do not treat alpha output as a durable on-disk format** — the
 remaining open items (9–10: the crate-root re-export surface and the
 MSRV/edition policy) may still move.
 
+### The `merkle` feature — experimental, bytes NOT frozen
+
+A default-**off** cargo feature, `merkle`, gates `src/merkle.rs`, which ships a
+generic content-addressed Merkle-DAG node helper:
+
+```rust
+use content_addressable::merkle::MerkleNode;   // needs feature = "merkle"
+use content_addressable::ContentAddressable;
+
+let root = MerkleNode::genesis("hello");        // a node with no parents
+let root_id = root.id().unwrap();
+let child = MerkleNode::new("world", [root_id]); // links root as a parent
+assert!(child.parents().contains(&root_id));     // root is recoverable as a link
+```
+
+`MerkleNode<T>` is a `payload: T` plus `parents: BTreeSet<ContentId>`, and its
+id (`ContentAddressable::content_id`, aliased as `.id()`) is derived from
+**both** the payload and the parent links — exactly the agent-mesh
+conversation-event shape (event id = the `ContentId` of the canonical event
+*including its parent cids*). The `BTreeSet` deduplicates parents and orders
+them by `ContentId`'s content-derived `Ord`, so equal parent sets always
+produce equal bytes regardless of insertion order; each parent serializes as a
+dag-cbor **tag-42 link**, so a node's parents are real IPLD links.
+
+> ⚠️ **Its serialized bytes are NOT frozen.** Unlike the `ContentId` /
+> `canonical` surface above, this feature is experimental. The node's byte
+> layout is pinned only once **Merkle conformance vectors** land (a follow-up
+> toward `0.1.0-rc1`); it depends on (a) the `ContentId` tag-42 serde repr
+> (must-fix gate item 1) and (b) the `payload` / `parents` field key strings.
+> Until those vectors freeze it, changing the node's bytes is **allowed and is
+> not a breaking change** — and merkle vectors are deliberately **kept out of
+> `tests/vectors.json`** (the frozen cross-language byte-parity gate). After
+> `0.1.0`, changing them is a major version bump.
+
+Enable it with `--features merkle` (or `--all-features`):
+
+```sh
+cargo test --features merkle      # compile + run the merkle module's tests
+```
+
+CI and the pre-push hook run `--all-features`, so the feature is exercised on
+every push while the plain `cargo test` keeps the default surface green (and
+proves `merkle` stays off by default).
+
 #### Byte-parity gate (`tests/vectors.json`)
 
 A single shared golden-vector file, `tests/vectors.json`, is generated *from the

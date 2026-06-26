@@ -80,10 +80,14 @@
 pub mod canonical;
 pub mod content_id;
 pub mod error;
+#[cfg(feature = "merkle")]
+pub mod merkle;
 pub mod trait_def;
 
 pub use content_id::{ContentId, BLAKE3_HASH_CODE, DAG_CBOR_CODEC};
 pub use error::ContentError;
+#[cfg(feature = "merkle")]
+pub use merkle::MerkleNode;
 pub use trait_def::ContentAddressable;
 
 #[cfg(test)]

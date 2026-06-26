@@ -24,6 +24,15 @@ repository = "https://github.com/hartsock/content-addressable"
 keywords = ["content-addressing", "ipld", "cid", "merkle", "blake3"]
 categories = ["cryptography", "data-structures", "encoding"]
 
+[features]
+# `merkle` gates the experimental content-addressed Merkle-DAG node helper
+# (`src/merkle.rs`, `MerkleNode<T>`). Default-OFF: a plain `cargo build` /
+# `cargo test` does NOT compile it, so no new symbols leak into the default
+# surface. Its serialized bytes are NON-FROZEN until Merkle conformance vectors
+# land (a follow-up toward 0.1.0-rc1) — see the module docs. CI and the pre-push
+# hook exercise it via `--all-features`.
+merkle = []
+
 [dependencies]
 # ipld-core re-exports the `cid` crate (as ipld_core::cid) which in turn
 # re-exports `multihash` (as ipld_core::cid::multihash). Enabling the `serde`

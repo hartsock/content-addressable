@@ -13,10 +13,15 @@ set -euo pipefail
 echo "==> cargo fmt --check"
 cargo fmt -- --check
 
-echo "==> cargo clippy --all-targets -- -D warnings"
-cargo clippy --all-targets -- -D warnings
+echo "==> cargo clippy --all-targets --all-features -- -D warnings"
+cargo clippy --all-targets --all-features -- -D warnings
 
-echo "==> cargo test (includes doctests)"
+echo "==> cargo test (default features — proves the merkle feature stays off)"
 cargo test
+
+# --all-features compiles + tests the default-OFF `merkle` feature
+# (src/merkle.rs / MerkleNode), mirroring the CI `test` job.
+echo "==> cargo test --all-features (exercises the merkle feature)"
+cargo test --all-features
 
 echo "pre-push checks passed."
