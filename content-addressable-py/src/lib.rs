@@ -32,7 +32,12 @@ use std::hash::{Hash, Hasher};
 /// integrity. Construct one from already-canonical bytes via
 /// [`ContentId.from_canonical_bytes`], or obtain one for a Python value via the
 /// module-level [`content_id`] helper.
-#[pyclass(module = "content_addressable", name = "ContentId", frozen)]
+#[pyclass(
+    module = "content_addressable",
+    name = "ContentId",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 struct PyContentId {
     inner: CoreContentId,
@@ -132,8 +137,17 @@ fn to_canonical_dagcbor<'py>(
 /// Convert a serde [`Ipld`] value into a native Python object.
 ///
 /// This is done by hand rather than via `pythonize` because dag-cbor integers
-/// are `i128` (`Ipld::Integer`), and `pythonize`'s serializer does not support
-/// `i128`. Python ints are arbitrary precision, so the mapping is lossless:
+/// are `i128` (`Ipld::Integer`). When this binding was bootstrapped on
+/// `pythonize` 0.26 the serializer had no `serialize_i128`, so a full-width
+/// integer could not survive the decode path. As of `pythonize` 0.29
+/// (re-checked 2026-06-25) the serializer *does* implement `serialize_i128`,
+/// so a `pythonize`-based decode would now round-trip `i128`. The manual
+/// converter is retained deliberately: it is the decode contract this crate
+/// has always shipped, and a security bump must not change emitted Python
+/// values. Switching to `pythonize::pythonize` is a separate, behavior-review
+/// follow-up — not part of this lockstep version bump.
+///
+/// Python ints are arbitrary precision, so the mapping is lossless:
 ///
 /// - `Null` -> `None`, `Bool` -> `bool`, `Float` -> `float`, `String` -> `str`
 /// - `Integer(i128)` -> `int` (full width, no overflow)
@@ -180,7 +194,9 @@ fn from_canonical_dagcbor<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'
     // dag-cbor bytes -> serde Ipld value.
     let value: Ipld = canonical::from_canonical_dagcbor(data)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    // serde Ipld value -> Python object (manual; pythonize can't do i128).
+    // serde Ipld value -> Python object via the hand-written converter (the
+    // crate's shipped decode contract; see `ipld_to_py` for why it is kept even
+    // though pythonize 0.29 can now serialize i128).
     ipld_to_py(py, &value)
 }
 

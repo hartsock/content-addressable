@@ -29,12 +29,12 @@ content-addressable = { path = ".." }
 # `extension-module` keeps us from linking libpython (correct for an importable
 # .so). This feature is also re-asserted by maturin via pyproject.toml so that
 # `cargo build -p content-addressable-py` and `maturin` agree.
-pyo3 = { version = "0.26", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 # Canonical dag-cbor codec — the same one the core crate uses — so Python and
 # Rust produce byte-identical canonical forms (and thus identical ContentIds).
 serde_ipld_dagcbor = "0.6"
-# Bridge between Python objects and serde. Version-locked to pyo3 0.26.
-pythonize = "0.26"
+# Bridge between Python objects and serde. Version-locked to pyo3 0.29.
+pythonize = "0.29"
 # `Ipld` is the serde intermediate value: it has Bytes, Map<String,_> (sorted),
 # Link(Cid), etc., matching the dag-cbor data model exactly.
 ipld-core = { version = "0.4", features = ["serde"] }
