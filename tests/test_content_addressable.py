@@ -118,6 +118,63 @@ def test_content_id_v1_base32_string_shape():
 
 
 # --------------------------------------------------------------------------- #
+# Frozen presentation accessors (issue #6): digest_bytes / digest_hex
+# --------------------------------------------------------------------------- #
+
+
+def test_digest_bytes_is_raw_32_byte_blake3_hash():
+    """digest_bytes() is the bare 32-byte BLAKE3 digest — no CID envelope."""
+    cid = content_id({"a": 1})
+    d = cid.digest_bytes()
+    assert isinstance(d, bytes)
+    assert len(d) == 32
+    # It is the tail of to_bytes() after the 4-byte CID envelope prefix
+    # (0x01 v1, 0x71 dag-cbor, 0x1e BLAKE3, 0x20 len-32).
+    assert cid.to_bytes() == bytes([0x01, 0x71, 0x1E, 0x20]) + d
+    assert cid.to_bytes()[-32:] == d
+
+
+def test_digest_hex_is_64_char_lower_hex_no_prefix():
+    """digest_hex() is the 'bare-digest-hex' form: 64 lower-hex chars, no prefix."""
+    cid = content_id({"a": 1})
+    h = cid.digest_hex()
+    assert isinstance(h, str)
+    assert len(h) == 64
+    assert not h.startswith("0x")
+    assert h == h.lower()
+    assert all(c in "0123456789abcdef" for c in h)
+    # It is exactly hex of digest_bytes() — NOT hex of the full CID.
+    assert h == cid.digest_bytes().hex()
+    # And it is strictly shorter than full-CID-bytes-hex, which it is the tail of.
+    cid_hex = cid.to_bytes().hex()
+    assert cid_hex.endswith(h)
+    assert len(cid_hex) > len(h)
+    assert cid_hex == "01711e20" + h
+
+
+def test_digest_hex_empty_map_is_frozen_value():
+    """The empty-map digest_hex is the documented frozen value (issue #6)."""
+    cid = content_id({})
+    assert (
+        cid.digest_hex()
+        == "1f94cbf313b3ce23257a7251ea0fc95a24556ea611e4f8f475e549971baedb02"
+    )
+
+
+def test_digest_forms_agree_with_no_rehash_bridge():
+    """digest_bytes() round-trips through the no-rehash constructor.
+
+    Wrapping a ContentId's own digest_bytes() via from_blake3_content_digest
+    reproduces the same id — proving digest_bytes() is exactly the digest the
+    CID carries.
+    """
+    cid = content_id({"x": [1, 2, 3]})
+    rebuilt = ContentId.from_blake3_content_digest(cid.digest_bytes())
+    assert rebuilt == cid
+    assert rebuilt.digest_hex() == cid.digest_hex()
+
+
+# --------------------------------------------------------------------------- #
 # Canonical dag-cbor: order independence (canonical sorting reaches Python)
 # --------------------------------------------------------------------------- #
 
@@ -418,6 +475,22 @@ def test_golden_vector_matches_python_face(vector):
     )
     assert cid.to_bytes().hex() == vector["content_id_bytes_hex"], (
         f"[{vector['name']}] ContentId bytes drifted"
+    )
+
+    # The named presentation accessor digest_hex (issue #6) — the
+    # bare-digest-hex form — must match the pinned value byte-for-byte, just as
+    # the Rust gate asserts. This is what enforces cross-language parity for the
+    # new accessor.
+    assert cid.digest_hex() == vector["digest_hex"], (
+        f"[{vector['name']}] digest_hex drifted"
+    )
+    # And digest_bytes() is the raw form of the same digest.
+    assert cid.digest_bytes().hex() == vector["digest_hex"], (
+        f"[{vector['name']}] digest_bytes() disagrees with pinned digest_hex"
+    )
+    # Structural cross-check: digest_hex is the CID-bytes tail after the prefix.
+    assert vector["content_id_bytes_hex"] == "01711e20" + vector["digest_hex"], (
+        f"[{vector['name']}] digest_hex must be the CID-bytes tail"
     )
 
     # The pinned bytes must also parse back to the same id (cross-check).

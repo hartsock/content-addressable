@@ -43,6 +43,38 @@ The CID is built explicitly: `BLAKE3(bytes)` → `Multihash::wrap(0x1e, digest)`
   mirrors this as `ContentId.from_blake3_content_digest(bytes)`, validating the
   32-byte length and raising `ValueError` otherwise.)
 
+### Presentation contract (FROZEN)
+
+Whatever forms a `ContentId` prints and emits become a byte/wire contract at
+`0.1.0`. The crate names **four** distinct presentation forms so callers can't
+confuse them, and freezes each (changing any is a major version bump):
+
+| Form | Method (Rust / Python) | What it is |
+|------|------------------------|------------|
+| **Canonical text** | `Display` / `to_string()` · `str(id)` | multibase **base32-lower** (`b…`) — the IPLD-canonical CID string |
+| **Binary envelope** | `to_bytes()` / `from_bytes()` · `to_bytes()` / `from_bytes()` | the full **CID binary** form (version + codec + multihash + digest) |
+| **Bare digest** | `digest_bytes() -> [u8; 32]` · `digest_bytes() -> bytes` | the raw **32-byte BLAKE3** hash — no envelope |
+| **Bare-digest-hex** | `digest_hex() -> String` · `digest_hex() -> str` | lower-hex of the 32-byte digest (**64 chars, no prefix**) |
+
+There are **three mutually-incompatible "hex" conventions** for a CID in the
+wild; the crate names them to end the ambiguity:
+
+1. **bare-digest-hex** — hex of the raw 32-byte digest. This is what
+   `digest_hex()` returns (the "swarm" / kyln `to_hex()` form: shortest, hash
+   only).
+2. **full-CID-bytes-hex** — hex of `to_bytes()` (the whole envelope as base16).
+   **Deliberately not a method.** It is just `hex::encode(id.to_bytes())`;
+   blessing it as `cid_hex()` would add a third "hex" that invites exactly the
+   confusion this contract exists to end. A caller who truly needs it
+   hex-encodes `to_bytes()` and owns that choice. (Recorded so it is not
+   re-litigated; it can be added later additively.)
+3. **multibase base32-lower** — the `Display` string; the canonical text form.
+
+`Display` is the inverse of `FromStr` for base32-lower, and that round-trip is
+frozen and tested. The `digest_hex()` of every conformance vector is pinned in
+`tests/vectors.json` and asserted in **both** the Rust and Python gates, so the
+new accessor's bytes cannot drift across languages.
+
 [`Cid`]: https://docs.rs/cid
 [`cid`]: https://crates.io/crates/cid
 [`ipld-core`]: https://crates.io/crates/ipld-core
@@ -74,7 +106,9 @@ impl ContentAddressable for Record {
 let r = Record { name: "alpha".into(), attrs: BTreeMap::new() };
 let id = r.content_id().unwrap();          // a CIDv1 (dag-cbor + BLAKE3)
 assert!(r.verify(&id).unwrap());           // self-certifying
-println!("{id}");                          // base32-lower multibase string
+println!("{id}");                          // base32-lower multibase string (Display)
+let _digest: [u8; 32] = id.digest_bytes(); // the raw BLAKE3 hash (no envelope)
+let _hex: String = id.digest_hex();        // 64-char bare-digest-hex (no prefix)
 ```
 
 ## Alpha status — bytes are NOT frozen
@@ -87,9 +121,17 @@ open:
 1. **SETTLED ([#3]).** The serde representation of `ContentId` is frozen: a
    dag-cbor **tag-42 link** (binary form) via the inner `Cid`'s serde, pinned
    by a full-byte golden test.
-2. **SETTLED — serde aspect ([#3]).** `Display` / `FromStr` use multibase
-   **base32-lower** (the `b…` CIDv1 string); this text form is frozen alongside
-   item 1.
+2. **SETTLED ([#6]).** The **presentation surface** is frozen. `Display` /
+   `to_string()` is multibase **base32-lower** (the `b…` CIDv1 string), the
+   canonical text form; `to_bytes()` / `from_bytes()` is the CID **binary
+   envelope**. `FromStr` is the inverse of `Display` for base32-lower (that
+   round-trip is frozen); its tolerance of other multibases is a documented
+   *convenience, not a contract*. Two named raw-digest accessors are added and
+   frozen: **`digest_bytes()`** (the bare 32-byte BLAKE3 hash) and
+   **`digest_hex()`** (its 64-char lower-hex, the "bare-digest-hex"
+   convention). The redundant `cid_hex()` is **deliberately not added** —
+   `hex::encode(id.to_bytes())` covers it without a third ambiguous "hex". See
+   the **presentation contract** below.
 3. **SETTLED ([#4]).** The hash function (BLAKE3) and codec (dag-cbor) are
    **fixed forever** for the `0.1.x` line, not selectable.
 4. **SETTLED ([#4]).** Multihash digest length is **32 bytes, fixed**.
@@ -110,6 +152,7 @@ existing bytes change); the wrapping rule downstream BLAKE3-native systems
 
 [#3]: https://github.com/hartsock/content-addressable/issues/3
 [#4]: https://github.com/hartsock/content-addressable/issues/4
+[#6]: https://github.com/hartsock/content-addressable/issues/6
 [#10]: https://github.com/hartsock/content-addressable/issues/10
 
 Until `0.1.0`, **do not treat alpha output as a durable on-disk format** — the
