@@ -113,10 +113,10 @@ let _hex: String = id.digest_hex();        // 64-char bare-digest-hex (no prefix
 
 ## Alpha status — bytes are NOT frozen
 
-This is **`0.1.0-alpha.1`**, working toward `0.1.0`. Several byte/wire items are
-now **frozen** (a stability contract across the `0.1.x` line — changing them is
-a major version bump); the rest of the **"must-fix gate"** (10 items) remains
-open:
+This is **`0.1.0-alpha.1`**, working toward `0.1.0`. Most of the byte/wire
+items are now **frozen** (a stability contract across the `0.1.x` line —
+changing them is a major version bump); of the 10 **"must-fix gate"** items,
+only the last two (9–10) remain open:
 
 1. **SETTLED ([#3]).** The serde representation of `ContentId` is frozen: a
    dag-cbor **tag-42 link** (binary form) via the inner `Cid`'s serde, pinned
@@ -136,9 +136,29 @@ open:
    **fixed forever** for the `0.1.x` line, not selectable.
 4. **SETTLED ([#4]).** Multihash digest length is **32 bytes, fixed**.
 5. **SETTLED ([#4]).** CID version policy: **v1 only**.
-6. Behavior on non-canonical input passed to `from_canonical_bytes`.
-7. Error variant stability (`ContentError` is `#[non_exhaustive]`).
-8. Whether `verify` mismatch should ever be an `Err` vs `Ok(false)`.
+6. **SETTLED ([#5]).** Behavior on non-canonical input to `from_canonical_bytes`
+   is frozen: it stays the **fast, unchecked** minting primitive carrying a
+   **normative** "MUST pass canonical dag-cbor" precondition (passing
+   non-canonical bytes mints a misleading id — a logic error, unenforced by
+   design), with `content_id` / `to_canonical_dagcbor` as the documented safe
+   default. An opt-in **`from_canonical_bytes_checked()`** re-encode-validates
+   foreign/untrusted bytes and returns the new typed
+   **`ContentError::NonCanonical`** (or `DecodingError` for non-dag-cbor). The
+   name is **not** changed to `_unchecked`; `from_canonical_bytes` /
+   `from_canonical_bytes_checked` is the frozen pairing.
+7. **SETTLED ([#7]).** `ContentError` is **frozen** as `#[non_exhaustive]` (so
+   variants can be *added* later without a major bump). The codec source types
+   are hidden behind `Box<dyn Error + Send + Sync + 'static>` (no
+   `serde_ipld_dagcbor` generics in the public signature); `InvalidCid` now
+   preserves the underlying `cid::Error` as a `#[source]`; **no `#[from]`**
+   impls (a deliberate freeze decision); `ContentError: Send + Sync + 'static`
+   is locked by a compile-time test. The error module documents the
+   operation→variant map.
+8. **SETTLED ([#8]).** `verify` returns **`Ok(false)`** on a mismatch (never an
+   `Err`) — frozen. A strict sibling **`ensure_content_id()`** returns
+   **`Err(ContentError::VerificationFailed)`** on mismatch (and `Ok(())` on
+   match), making `VerificationFailed` a real, tested error path. Both return
+   contracts are part of the frozen `0.1.0` API surface.
 9. The public re-export surface from the crate root.
 10. MSRV floor and edition policy.
 
@@ -152,11 +172,15 @@ existing bytes change); the wrapping rule downstream BLAKE3-native systems
 
 [#3]: https://github.com/hartsock/content-addressable/issues/3
 [#4]: https://github.com/hartsock/content-addressable/issues/4
+[#5]: https://github.com/hartsock/content-addressable/issues/5
 [#6]: https://github.com/hartsock/content-addressable/issues/6
+[#7]: https://github.com/hartsock/content-addressable/issues/7
+[#8]: https://github.com/hartsock/content-addressable/issues/8
 [#10]: https://github.com/hartsock/content-addressable/issues/10
 
 Until `0.1.0`, **do not treat alpha output as a durable on-disk format** — the
-remaining open items (6–10) may still move.
+remaining open items (9–10: the crate-root re-export surface and the
+MSRV/edition policy) may still move.
 
 #### Byte-parity gate (`tests/vectors.json`)
 

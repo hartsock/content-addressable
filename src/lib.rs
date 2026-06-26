@@ -49,14 +49,30 @@
 //!
 //! ## Stability
 //!
-//! This is `0.1.0-alpha.1`, working toward `0.1.0`. Several items of the
-//! byte/wire "must-fix gate" are now **frozen**: the [`ContentId`] serde
-//! representation (binary dag-cbor tag-42 link + multibase base32-lower text
-//! form) and the CID parameters (CIDv1, dag-cbor `0x71`, BLAKE3 `0x1e`,
-//! 32-byte digest) are a stability contract across the `0.1.x` line — changing
-//! them is a major version bump. Remaining gate items (non-canonical-input
-//! behavior, error-variant stability, MSRV/edition policy, …) are still open,
-//! so the crate as a whole is not yet declared `0.1.0`. The frozen bytes are
+//! This is `0.1.0-alpha.1`, working toward `0.1.0`. Most items of the byte/wire
+//! "must-fix gate" are now **frozen** — a stability contract across the `0.1.x`
+//! line, where changing them is a major version bump:
+//!
+//! - The [`ContentId`] serde representation (binary dag-cbor tag-42 link +
+//!   multibase base32-lower text form) and the CID parameters (CIDv1, dag-cbor
+//!   `0x71`, BLAKE3 `0x1e`, 32-byte digest).
+//! - **Non-canonical input behavior** (gate #6):
+//!   [`ContentId::from_canonical_bytes`] stays the fast, *unchecked* primitive
+//!   with a normative "MUST pass canonical dag-cbor" precondition; the opt-in
+//!   [`ContentId::from_canonical_bytes_checked`] re-encode-validates foreign
+//!   bytes and errors with [`ContentError::NonCanonical`].
+//! - **Error-variant stability** (gate #7): [`ContentError`] is frozen
+//!   `#[non_exhaustive]` with boxed codec sources and a sourced `InvalidCid`;
+//!   see the [`error`] module docs for the operation→variant map.
+//! - **`verify` mismatch contract** (gate #8): both the return contracts of
+//!   [`ContentAddressable::verify`] (`Ok(false)` on mismatch, never an `Err`)
+//!   and its strict sibling [`ContentAddressable::ensure_content_id`]
+//!   (`Err(`[`ContentError::VerificationFailed`]`)` on mismatch) are part of the
+//!   frozen `0.1.0` API surface — distinct from, but alongside, the byte/wire
+//!   gate.
+//!
+//! The remaining open gate items (the crate-root re-export surface, MSRV/edition
+//! policy) keep the crate from being declared `0.1.0` yet. The frozen bytes are
 //! pinned by `tests/vectors.json` and the in-crate golden tests.
 
 #![warn(missing_docs)]
@@ -156,6 +172,73 @@ mod tests {
         assert!(
             !b.verify(&id_a).unwrap(),
             "a different value must not verify against another value's id"
+        );
+    }
+
+    #[test]
+    fn ensure_content_id_ok_on_match_err_on_mismatch() {
+        // Issue #8: the strict helper. On a match it returns Ok(()); on a
+        // mismatch it returns Err(VerificationFailed) carrying both ids as their
+        // Display (base32-lower) strings — making VerificationFailed a real,
+        // constructed, tested error path (no longer dead surface).
+        let a = sample_a();
+        let id_a = a.content_id().unwrap();
+        assert!(
+            a.ensure_content_id(&id_a).is_ok(),
+            "ensure_content_id must return Ok(()) when the value matches its id"
+        );
+
+        let b = sample_b();
+        let id_b = b.content_id().unwrap();
+        let err = b
+            .ensure_content_id(&id_a)
+            .expect_err("ensure_content_id must Err when the value does not match");
+        match err {
+            ContentError::VerificationFailed { expected, computed } => {
+                // The fields are the two ids' Display strings, exactly.
+                assert_eq!(
+                    expected,
+                    id_a.to_string(),
+                    "expected field is the expected id's Display string"
+                );
+                assert_eq!(
+                    computed,
+                    id_b.to_string(),
+                    "computed field is the value's own (computed) id Display string"
+                );
+            }
+            other => panic!("expected VerificationFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_and_ensure_agree_and_both_surface_underlying_errors() {
+        // verify and ensure_content_id agree on the match/mismatch boolean, and
+        // both surface the SAME underlying error when canonical_form fails. A
+        // type whose canonical_form always errors models that path.
+        struct AlwaysFails;
+        impl ContentAddressable for AlwaysFails {
+            fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+                // dag-cbor forbids non-finite floats, so this is a real encode
+                // failure surfaced through content_id().
+                canonical::to_canonical_dagcbor(&f64::NAN)
+            }
+        }
+
+        let any_id = sample_a().content_id().unwrap();
+        assert!(
+            matches!(
+                AlwaysFails.verify(&any_id),
+                Err(ContentError::EncodingError { .. })
+            ),
+            "verify must surface the content_id() encoding error"
+        );
+        assert!(
+            matches!(
+                AlwaysFails.ensure_content_id(&any_id),
+                Err(ContentError::EncodingError { .. })
+            ),
+            "ensure_content_id must surface the same content_id() encoding error"
         );
     }
 
