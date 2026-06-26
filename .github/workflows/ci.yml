@@ -1,6 +1,9 @@
-# HOOK PARITY: mirrored by .githooks/pre-push.
-# When editing this file, update the push hook to match (same fmt/clippy/test
-# steps). The pre-push hook is the local equivalent of these CI gates.
+# HOOK PARITY: the cargo fmt/clippy/test jobs are mirrored by .githooks/pre-push.
+# When editing those, update the push hook to match. The `python` job below
+# (maturin + pytest for the PyO3 face) is CI-ONLY by design — building the
+# extension module is too heavy for a fast pre-push hook — so it is a documented
+# exception, the same pattern kyln uses to keep its p4d suite out of the hook.
+# The pre-push hook records this exception in its header.
 name: CI
 
 on:
@@ -56,3 +59,21 @@ jobs:
           components: rustfmt
       - name: cargo fmt --check
         run: cargo fmt -- --check
+
+  python:
+    name: python (PyO3 face)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: build the extension and run pytest
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip maturin pytest blake3
+          maturin develop -m content-addressable-py/Cargo.toml
+          pytest -q
