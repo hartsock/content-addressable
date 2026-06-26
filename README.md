@@ -84,6 +84,24 @@ including (non-exhaustive):
 
 Until `0.1.0`, **do not treat alpha output as a durable on-disk format.**
 
+#### Byte-parity gate (`tests/vectors.json`)
+
+A single shared golden-vector file, `tests/vectors.json`, is generated *from the
+Rust core* (the authority) and consumed verbatim by **both** the Rust gate
+(`tests/conformance.rs`) and the Python gate (`tests/test_content_addressable.py`),
+so any future byte drift — a dependency bump, an encoder change — fails loudly in
+*both* languages. It pins only the **currently-stable, JSON-expressible** dag-cbor
+subset (null, bool, integers, strings, lists, maps with string keys, and byte
+strings via the `{"$bytes": "<hex>"}` escape). Floats, and any value depending on
+the not-yet-frozen `ContentId` serde representation (must-fix-gate item 1), are
+**deliberately excluded**; they will *extend* the vectors once those items freeze.
+Regenerate after an intentional byte change (the reviewable signal that a major
+bump is due) with:
+
+```sh
+cargo test --test gen_vectors -- --ignored gen_vectors
+```
+
 ### Not compatible with the pre-alpha Python sibling
 
 This crate is **not byte-compatible** with the earlier pre-alpha Python
