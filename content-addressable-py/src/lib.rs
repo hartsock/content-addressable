@@ -7,7 +7,10 @@
 //!
 //! The public surface (module `content_addressable`):
 //!
-//! - [`ContentId`] — a self-certifying identity wrapping a CIDv1.
+//! - [`ContentId`] — a self-certifying identity wrapping a CIDv1. Its frozen
+//!   presentation forms (issue #6) are `str(id)` (base32-lower text),
+//!   `to_bytes()` (CID binary envelope), `digest_bytes()` (raw 32-byte BLAKE3
+//!   hash), and `digest_hex()` (bare-digest-hex).
 //! - [`to_canonical_dagcbor`] / [`from_canonical_dagcbor`] — the canonical
 //!   dag-cbor codec, applied to native Python values.
 //! - [`content_id`] — `ContentId.from_canonical_bytes(to_canonical_dagcbor(x))`.
@@ -110,8 +113,36 @@ impl PyContentId {
     }
 
     /// Encode this id as its canonical CID binary form (`bytes`).
+    ///
+    /// This is the full CID **envelope** (version + codec + multihash header +
+    /// digest), not the bare hash. Part of the frozen presentation contract
+    /// (issue #6); mirrors the Rust core's `to_bytes`.
     fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.inner.to_bytes())
+    }
+
+    /// The raw 32-byte BLAKE3 content digest (`bytes`) — the bare hash, with no
+    /// CID envelope.
+    ///
+    /// This is the sovereign hash an adopter joins on across systems. The length
+    /// is a frozen invariant (always 32 bytes). Mirrors the Rust core's
+    /// `digest_bytes`; part of the frozen presentation contract (issue #6).
+    fn digest_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.digest_bytes())
+    }
+
+    /// Lowercase hex of the raw 32-byte BLAKE3 digest: 64 chars, no `0x`/
+    /// multibase prefix (`str`).
+    ///
+    /// This is the **"bare-digest-hex"** convention — hex of `digest_bytes()`,
+    /// *not* of the full CID. It is the shortest, hash-only "hex" form (e.g.
+    /// kyln's `to_hex()`). For the full CID envelope as hex, hex-encode
+    /// `to_bytes()` explicitly; this crate deliberately does not provide a
+    /// `cid_hex()` (it would re-introduce the ambiguity this contract ends —
+    /// see the Rust core docs). Mirrors the Rust core's `digest_hex`; part of
+    /// the frozen presentation contract (issue #6).
+    fn digest_hex(&self) -> String {
+        self.inner.digest_hex()
     }
 
     fn __str__(&self) -> String {

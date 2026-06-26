@@ -126,8 +126,16 @@ fn render(entries: &[Entry]) -> String {
             json_string(&e.content_id_str)
         ));
         out.push_str(&format!(
-            "    \"content_id_bytes_hex\": {}\n",
+            "    \"content_id_bytes_hex\": {},\n",
             json_string(&e.content_id_bytes_hex)
+        ));
+        // Presentation contract (issue #6): the "bare-digest-hex" form — 64-char
+        // lower-hex of the raw 32-byte BLAKE3 digest, NO envelope/prefix. This
+        // is hex of `digest_bytes()`; it equals the tail of `content_id_bytes_hex`
+        // after the 8-char `01711e20` CID prefix. Pinned in BOTH language gates.
+        out.push_str(&format!(
+            "    \"digest_hex\": {}\n",
+            json_string(&e.digest_hex)
         ));
         if i + 1 < entries.len() {
             out.push_str("  },\n");
@@ -151,6 +159,7 @@ struct Entry {
     canonical_dagcbor_hex: String,
     content_id_str: String,
     content_id_bytes_hex: String,
+    digest_hex: String,
 }
 
 #[test]
@@ -170,6 +179,7 @@ fn gen_vectors() {
                 canonical_dagcbor_hex: bytes_to_hex(&bytes),
                 content_id_str: id.to_string(),
                 content_id_bytes_hex: bytes_to_hex(&id.to_bytes()),
+                digest_hex: id.digest_hex(),
             }
         })
         .collect();

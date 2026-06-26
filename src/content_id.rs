@@ -92,6 +92,46 @@ const BLAKE3_DIGEST_LEN: usize = 32;
 ///   carry a readable, portable CID rather than a raw byte array. The crate
 ///   adds a thin `is_human_readable` branch over the inner `Cid` to guarantee
 ///   this; the IPLD/binary path is unchanged.
+///
+/// # Presentation contract (FROZEN at 0.1.0)
+///
+/// Whatever string and byte forms this type emits become a **byte/wire
+/// contract** at `0.1.0`: changing any of them afterward is a **major version
+/// bump**, never a patch (issue #6, gate item 2). The full presentation
+/// surface is therefore named and frozen explicitly, with conformance vectors
+/// (`tests/vectors.json` + the in-crate goldens) pinning the exact bytes. There
+/// are **four** distinct presentation forms, each load-bearing for a different
+/// reason — do not confuse them:
+///
+/// | Form | Method | What it is |
+/// |------|--------|------------|
+/// | **Canonical text** | [`Display`](fmt::Display) / [`to_string`](ToString::to_string) | multibase **base32-lower** (`b…`), the IPLD-canonical CID string |
+/// | **Binary envelope** | [`to_bytes`](Self::to_bytes) / [`from_bytes`](Self::from_bytes) | the full **CID binary** form (version + codec + multihash + digest) |
+/// | **Bare digest** | [`digest_bytes`](Self::digest_bytes) | the raw **32-byte BLAKE3** hash (no envelope) |
+/// | **Bare-digest-hex** | [`digest_hex`](Self::digest_hex) | lowercase **hex of the 32-byte digest** (64 chars, no prefix) |
+///
+/// **Three incompatible "hex" conventions** exist in the wild for a CID; an
+/// adopter must pick one, so the crate names them to end the ambiguity:
+///
+/// 1. **bare-digest-hex** — hex of the raw 32-byte BLAKE3 digest. *This is what
+///    [`digest_hex`](Self::digest_hex) returns* (the "swarm" / kyln `to_hex()`
+///    convention: shortest, hash-only).
+/// 2. **full-CID-bytes-hex** — hex of [`to_bytes`](Self::to_bytes) (the whole
+///    CID envelope as base16). *Deliberately **not** a method.* Convention #2 is
+///    just `hex::encode(id.to_bytes())`; blessing it as `cid_hex()` would add a
+///    third "hex" accessor that invites exactly the confusion this contract
+///    exists to end. A caller who genuinely needs CID-bytes-as-hex hex-encodes
+///    [`to_bytes`](Self::to_bytes) explicitly and owns that choice. (This
+///    non-decision is recorded so it is not re-litigated; it can be added later
+///    additively without breaking the frozen surface.)
+/// 3. **multibase base32-lower** — the [`Display`](fmt::Display) string. Use
+///    this, not a hex form, as the canonical text representation.
+///
+/// `Display` emits base32-lower and is the **inverse of [`FromStr`] for that
+/// form**: the `Display`→`FromStr` round-trip is frozen and tested. `FromStr`
+/// *also* tolerates other multibases (base58, base16, …) as a **convenience,
+/// not a contract** — that tolerance may be tightened later without breaking
+/// the frozen base32-lower round-trip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContentId(Cid);
 
@@ -198,7 +238,78 @@ impl ContentId {
         &self.0
     }
 
+    /// The raw 32-byte BLAKE3 content digest, copied out of the multihash.
+    ///
+    /// This is the **bare hash** — *not* the CID envelope. It is the sovereign
+    /// hash an adopter joins on across systems (the same digest a BLAKE3-native
+    /// upstream would hand to [`from_blake3_content_digest`](Self::from_blake3_content_digest)).
+    ///
+    /// The length is a **frozen invariant**: every `ContentId` carries exactly
+    /// `BLAKE3_DIGEST_LEN` (32) digest bytes (see the
+    /// [CID-parameters contract](ContentId#cid-parameters-frozen-at-010)), so
+    /// this accessor is infallible and returns a fixed-size array. The copy
+    /// (`try_into`) can never fail; the `expect` documents the invariant and is
+    /// unreachable for any id this crate mints.
+    ///
+    /// Part of the **frozen presentation contract** — see the
+    /// [presentation contract](ContentId#presentation-contract-frozen-at-010).
+    #[must_use]
+    pub fn digest_bytes(&self) -> [u8; BLAKE3_DIGEST_LEN] {
+        self.0
+            .hash()
+            .digest()
+            .try_into()
+            .expect("a ContentId multihash always carries a 32-byte BLAKE3 digest")
+    }
+
+    /// Lowercase hex of the raw 32-byte BLAKE3 digest: 64 hex chars, **no**
+    /// `0x` or multibase prefix.
+    ///
+    /// This is the **"bare-digest-hex"** convention (the shortest, hash-only
+    /// "hex" form an adopter reaches for, e.g. kyln's `to_hex()`). It is hex of
+    /// [`digest_bytes`](Self::digest_bytes) — *not* hex of the full CID. The
+    /// three "hex" forms in the wild are mutually incompatible; this crate names
+    /// each so they cannot be confused:
+    ///
+    /// - **bare-digest-hex** = this method = `digest_hex()` (64 chars, hash
+    ///   only).
+    /// - **full-CID-bytes-hex** = `hex::encode(id.to_bytes())` — the whole CID
+    ///   envelope (version + codec + multihash header + digest) as base16.
+    ///   *Deliberately not provided as a method* (see the
+    ///   [presentation contract](ContentId#presentation-contract-frozen-at-010));
+    ///   a caller who truly needs it hex-encodes [`to_bytes`](Self::to_bytes)
+    ///   and owns that choice.
+    /// - **multibase base32-lower** = the [`Display`](fmt::Display) /
+    ///   [`to_string`](ToString::to_string) string (`b…`), the IPLD-canonical
+    ///   text form.
+    ///
+    /// Part of the **frozen presentation contract** — see the
+    /// [presentation contract](ContentId#presentation-contract-frozen-at-010).
+    #[must_use]
+    pub fn digest_hex(&self) -> String {
+        let digest = self.digest_bytes();
+        let mut s = String::with_capacity(digest.len() * 2);
+        for b in digest {
+            // Hand-rolled 32->64 lowercase hex: avoids taking a `hex` crate
+            // dependency for a byte-frozen surface (issue #6: "hand-roll
+            // 32->64 hex to avoid the dep — implementer's call").
+            s.push(char::from_digit((b >> 4) as u32, 16).expect("nibble < 16 is a hex digit"));
+            s.push(char::from_digit((b & 0x0f) as u32, 16).expect("nibble < 16 is a hex digit"));
+        }
+        s
+    }
+
     /// Encode this id as its canonical CID binary form.
+    ///
+    /// This is the full **CID envelope**: version + codec (`0x71`) + multihash
+    /// header + digest — *not* the bare hash. It round-trips through
+    /// [`from_bytes`](Self::from_bytes). For the hex of *this* form ("full-CID-
+    /// bytes-hex"), a caller hex-encodes the result explicitly; the crate
+    /// deliberately does not bless a `cid_hex()` method (see the
+    /// [presentation contract](ContentId#presentation-contract-frozen-at-010)).
+    ///
+    /// Part of the **frozen presentation contract** — see the
+    /// [presentation contract](ContentId#presentation-contract-frozen-at-010).
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.to_bytes()
@@ -231,8 +342,17 @@ impl From<ContentId> for Cid {
 }
 
 impl fmt::Display for ContentId {
-    /// Render as the inner CID's default multibase string (base32-lower for
-    /// CIDv1).
+    /// Render as multibase **base32-lower** (the `b…` CIDv1 string).
+    ///
+    /// This is the crate's **canonical text form** and is **frozen** for the
+    /// `0.1.x` line — see the
+    /// [presentation contract](ContentId#presentation-contract-frozen-at-010).
+    /// It is the IPLD-canonical CID string and the same text the human-readable
+    /// serde form emits. It is the inverse of [`FromStr`] for base32-lower:
+    /// `id.to_string().parse() == Ok(id)` is a tested, frozen round-trip. A unit
+    /// test and the conformance vectors pin the exact string for fixed inputs,
+    /// so any drift in the inner CID's rendering fails loudly. Changing this
+    /// form is a major version bump.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
@@ -242,6 +362,16 @@ impl FromStr for ContentId {
     type Err = ContentError;
 
     /// Parse an id from a multibase CID string.
+    ///
+    /// The frozen contract is narrow: `FromStr` is the **inverse of
+    /// [`Display`]** for the base32-lower form, and that round-trip
+    /// (`id.to_string().parse() == Ok(id)`) is the part pinned by the
+    /// [presentation contract](ContentId#presentation-contract-frozen-at-010).
+    /// As a **convenience (not a contract)** this also accepts other valid
+    /// multibases (base58, base16, …), since the inner [`Cid::from_str`] does;
+    /// that tolerance is *not* frozen and may be tightened later without
+    /// breaking the frozen base32-lower round-trip — so do not depend on parsing
+    /// non-base32 CID strings.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Cid::from_str(s)
             .map(ContentId)
@@ -469,5 +599,113 @@ mod no_rehash_digest_tests {
                  from_canonical_bytes(x)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    //! Tests for the **frozen presentation contract** (issue #6): the named,
+    //! separately-frozen string/byte forms a `ContentId` emits. These pin the
+    //! exact values for fixed inputs so any drift in the inner CID's rendering,
+    //! the multihash digest, or the hex encoder fails loudly. The cross-language
+    //! `tests/vectors.json` gate additionally pins `digest_hex` (and the base32
+    //! string + CID bytes) so Python parity is enforced too; these in-crate
+    //! tests assert the *accessor semantics* that the vectors cannot (the array
+    //! return, the no-prefix rule, the Display/FromStr round-trip).
+
+    use super::{ContentId, BLAKE3_DIGEST_LEN};
+
+    /// The documented fixed input: the empty-map canonical dag-cbor (`0xa0`).
+    /// This is the same id as the `empty_map` conformance vector and the
+    /// embedded-link golden, so all the pins agree.
+    fn empty_map_id() -> ContentId {
+        ContentId::from_canonical_bytes(&[0xa0])
+    }
+
+    /// The frozen `empty_map` digest (the BLAKE3 of `0xa0`), as bare-digest-hex.
+    /// Equals the tail of the `empty_map` vector's `content_id_bytes_hex`
+    /// (`01711e20` CID prefix, then this 64-char digest).
+    const EMPTY_MAP_DIGEST_HEX: &str =
+        "1f94cbf313b3ce23257a7251ea0fc95a24556ea611e4f8f475e549971baedb02";
+
+    #[test]
+    fn display_is_frozen_base32_lower() {
+        // The canonical text form is multibase base32-lower (`b…`), frozen.
+        let id = empty_map_id();
+        let s = id.to_string();
+        assert_eq!(
+            s, "bafyr4ia7stf7ge5tzyrsk6tskhva7sk2erkw5jqr4t4pi5pfjglrxlw3ai",
+            "Display must be the frozen base32-lower CID string"
+        );
+        assert!(s.starts_with('b'), "base32-lower multibase prefix is 'b'");
+    }
+
+    #[test]
+    fn display_fromstr_roundtrip_is_frozen() {
+        // The frozen guarantee: Display -> FromStr lands back on the same id.
+        let id = empty_map_id();
+        let parsed: ContentId = id.to_string().parse().expect("base32 string must reparse");
+        assert_eq!(parsed, id, "Display -> FromStr must round-trip");
+    }
+
+    #[test]
+    fn digest_bytes_is_the_raw_32_byte_blake3_hash() {
+        let id = empty_map_id();
+        let d = id.digest_bytes();
+        // It is a fixed-size 32-byte array...
+        assert_eq!(d.len(), BLAKE3_DIGEST_LEN);
+        // ...equal to the multihash's digest (the bare hash, no envelope)...
+        assert_eq!(&d[..], id.as_cid().hash().digest());
+        // ...and equal to an independent BLAKE3 of the input bytes.
+        assert_eq!(d, *blake3::hash(&[0xa0]).as_bytes());
+    }
+
+    #[test]
+    fn digest_hex_is_frozen_64_char_lower_hex_no_prefix() {
+        let id = empty_map_id();
+        let h = id.digest_hex();
+        // Exactly 64 lowercase hex chars, no `0x` prefix. (A hex digest may
+        // legitimately begin with the digit `b`; that is NOT the base32
+        // multibase prefix, which belongs only to the Display string.)
+        assert_eq!(h.len(), 64, "digest_hex is 64 chars (32 bytes)");
+        assert!(!h.starts_with("0x"), "digest_hex carries no 0x prefix");
+        assert!(
+            h.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "digest_hex is lowercase hex only"
+        );
+        // The exact frozen value for the empty map.
+        assert_eq!(
+            h, EMPTY_MAP_DIGEST_HEX,
+            "frozen empty-map digest_hex drifted"
+        );
+    }
+
+    #[test]
+    fn digest_hex_is_hex_of_digest_bytes_not_of_the_cid() {
+        // digest_hex names convention #1 (bare-digest-hex): it is hex of the
+        // bare digest, and is STRICTLY SHORTER than full-CID-bytes-hex
+        // (`hex::encode(to_bytes())`), which carries the 4-byte CID prefix too.
+        let id = empty_map_id();
+        let digest = id.digest_bytes();
+        let mut expected = String::new();
+        for b in digest {
+            expected.push_str(&format!("{b:02x}"));
+        }
+        assert_eq!(id.digest_hex(), expected);
+
+        // The full-CID-bytes-hex (the deliberately-unmethodd convention #2) is
+        // longer and ENDS WITH the digest hex, after the CID envelope prefix.
+        let cid_bytes_hex: String = id.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        assert!(
+            cid_bytes_hex.ends_with(&id.digest_hex()),
+            "the full-CID-bytes-hex ends with the bare-digest-hex"
+        );
+        assert!(
+            cid_bytes_hex.len() > id.digest_hex().len(),
+            "full-CID-bytes-hex is longer than bare-digest-hex (it has the envelope)"
+        );
+        // Concretely: the 4-byte CIDv1/dag-cbor/BLAKE3/len-32 prefix, then digest.
+        assert_eq!(cid_bytes_hex, format!("01711e20{}", id.digest_hex()));
     }
 }
