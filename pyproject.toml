@@ -1,0 +1,49 @@
+# Python packaging for `content-addressable` (import name: content_addressable).
+#
+# The compiled extension comes from the `content-addressable-py` workspace
+# member (a cdylib), built by maturin via `manifest-path` below. The core Rust
+# crate stays free of any PyO3 dependency.
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "content-addressable"
+version = "0.1.0a1"
+description = "IPLD-native content addressing for Python: data that carries its own proof of integrity (BLAKE3 + CIDv1 + canonical dag-cbor)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Shawn Hartsock" }]
+keywords = ["content-addressing", "ipld", "cid", "merkle", "blake3", "dag-cbor"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Security :: Cryptography",
+]
+
+[project.urls]
+Repository = "https://github.com/hartsock/content-addressable"
+
+[tool.maturin]
+# Build the bindings crate, not the workspace default (the core crate).
+manifest-path = "content-addressable-py/Cargo.toml"
+# The importable module name. The cdylib `[lib] name` already matches, but be
+# explicit so maturin installs it as `content_addressable`.
+module-name = "content_addressable"
+# Re-assert the extension-module linkage at the maturin layer (matches the
+# crate's own default features) so the wheel links correctly.
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

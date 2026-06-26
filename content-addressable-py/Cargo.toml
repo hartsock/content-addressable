@@ -1,0 +1,40 @@
+# content-addressable-py — Python/PyO3 bindings for the `content-addressable`
+# core crate.
+#
+# This is a SEPARATE workspace member (a cdylib), NOT a feature on the
+# published core crate. It is intentionally excluded from the workspace
+# `default-members`, so a plain `cargo build` / `cargo test` at the repo root
+# never compiles PyO3 or links `extension-module`. maturin builds this crate by
+# targeting this manifest explicitly (see ../pyproject.toml `manifest-path`).
+[package]
+name = "content-addressable-py"
+version = "0.1.0-alpha.1"
+edition = "2021"
+rust-version = "1.81"
+license = "Apache-2.0"
+description = "Python (PyO3) bindings for the content-addressable crate."
+repository = "https://github.com/hartsock/content-addressable"
+publish = false
+
+[lib]
+# The Python extension module is a C dynamic library. `name` controls the
+# produced artifact name; maturin renames/installs it as `content_addressable`.
+name = "content_addressable"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The core crate, by path. The core's own Cargo.toml gains NO PyO3 dependency.
+content-addressable = { path = ".." }
+# PyO3 with abi3-py39: one stable-ABI wheel covers CPython >= 3.9.
+# `extension-module` keeps us from linking libpython (correct for an importable
+# .so). This feature is also re-asserted by maturin via pyproject.toml so that
+# `cargo build -p content-addressable-py` and `maturin` agree.
+pyo3 = { version = "0.26", features = ["extension-module", "abi3-py39"] }
+# Canonical dag-cbor codec — the same one the core crate uses — so Python and
+# Rust produce byte-identical canonical forms (and thus identical ContentIds).
+serde_ipld_dagcbor = "0.6"
+# Bridge between Python objects and serde. Version-locked to pyo3 0.26.
+pythonize = "0.26"
+# `Ipld` is the serde intermediate value: it has Bytes, Map<String,_> (sorted),
+# Link(Cid), etc., matching the dag-cbor data model exactly.
+ipld-core = { version = "0.4", features = ["serde"] }
