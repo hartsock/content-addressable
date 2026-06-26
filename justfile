@@ -1,12 +1,13 @@
 # justfile for content-addressable.
 #
-# `just check` runs the full local gate (fmt + clippy + test + doc), the same
-# steps enforced by .githooks/pre-push and .github/workflows/ci.yml. The CI-only
+# `just check` runs the full local gate (fmt + clippy + test + doc + leaf), the
+# same steps enforced by .githooks/pre-push and .github/workflows/ci.yml. The
+# `leaf` step (issue #13) guards the published core's leaf invariant. The CI-only
 # `msrv` (1.85) and `python` (PyO3) jobs are intentionally not in `check` — see
 # the pre-push hook header for the rationale. Run the MSRV build with `just msrv`.
 
-# Run the full local check suite: format, lint, test, doc.
-check: fmt clippy test doc
+# Run the full local check suite: format, lint, test, doc, leaf guard.
+check: fmt clippy test doc leaf
 
 # Verify formatting (does not modify files).
 fmt:
@@ -27,6 +28,13 @@ test:
 # Build the docs with broken intra-doc links denied (mirrors the CI `doc` job).
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+# Assert the published core crate is a true leaf — its resolved dependency
+# closure must be registry-only (no path/git/workspace edges) so any repo can
+# depend on it without cycles (issue #13). Mirrors the CI `leaf-deps` job and
+# the pre-push hook; reads only `cargo metadata`, so it is fast and offline.
+leaf:
+    ./scripts/check-leaf-deps.sh
 
 # Build + test on the pinned MSRV (1.85). Mirrors the CI-only `msrv` job; run it
 # manually since installing a second toolchain is too heavy for the push hook.

@@ -111,6 +111,61 @@ let _digest: [u8; 32] = id.digest_bytes(); // the raw BLAKE3 hash (no envelope)
 let _hex: String = id.digest_hex();        // 64-char bare-digest-hex (no prefix)
 ```
 
+## Python
+
+The same primitives ship as a PyO3 binding on PyPI, backed by the **exact same
+Rust core** — so a `ContentId` computed in Python is **byte-identical** to the
+one Rust computes for the same value. Install it with:
+
+```sh
+pip install content-addressable          # PyPI: 0.1.0a1 (alpha — bytes NOT frozen)
+```
+
+> **Import name vs. distribution name.** The PyPI *distribution* is
+> `content-addressable` (hyphen); the *import* name is `content_addressable`
+> (underscore). You `pip install content-addressable` but
+> `import content_addressable`.
+
+The Python face has **no `ContentAddressable` trait and no `verify`** (the Rust
+example above doesn't translate). Instead you canonicalize a native Python value
+and take its `content_id` directly:
+
+```python
+from content_addressable import (
+    ContentId, content_id,
+    to_canonical_dagcbor, from_canonical_dagcbor,
+)
+
+# A value's content id (CIDv1, dag-cbor + BLAKE3). Key order is irrelevant:
+record = {"name": "alpha", "attrs": {}}
+cid = content_id(record)
+print(cid)                                   # base32-lower multibase string, 'b…'
+print(cid.digest_hex())                      # 64-char bare-digest-hex, no prefix
+print(to_canonical_dagcbor(record).hex())    # the canonical dag-cbor bytes, as hex
+
+# Canonical bytes round-trip; equal values -> equal bytes -> equal ids.
+raw = to_canonical_dagcbor(record)
+assert content_id(record) == ContentId.from_canonical_bytes(raw)
+assert from_canonical_dagcbor(raw) == record                   # decode round-trip
+assert content_id({"attrs": {}, "name": "alpha"}) == cid       # order-independent
+
+# Parse an id back from its string / binary forms.
+assert ContentId.parse(str(cid)) == cid
+assert ContentId.from_bytes(cid.to_bytes()) == cid
+
+# Wrap an already-computed 32-byte BLAKE3 digest as an id, with NO re-hash
+# (the Python mirror of the Rust no-rehash door). The 32-byte length is
+# validated; a wrong length raises ValueError.
+assert ContentId.from_blake3_content_digest(cid.digest_bytes()) == cid
+```
+
+`ContentId` also exposes `digest_bytes()` (the raw 32-byte BLAKE3 hash) and
+`__eq__` / `__hash__`, so an id is usable as a `dict` key or `set` member.
+
+The alpha **"bytes are NOT frozen"** caveat below applies *identically* to
+Python output — read the [Alpha status](#alpha-status--bytes-are-not-frozen)
+section before treating any `0.1.0a1` bytes as durable.
+
 ## Alpha status — bytes are NOT frozen
 
 This is **`0.1.0-alpha.1`**, working toward `0.1.0`. All 10 **"must-fix gate"**
