@@ -344,6 +344,17 @@ cargo fmt -- --check
 The pre-push hook (`.githooks/pre-push`) mirrors `.github/workflows/ci.yml`.
 Do not bypass it with `--no-verify`.
 
+## Releasing
+
+Releases are **tag-driven**: pushing a `v*` tag runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
+the multi-platform abi3 wheel matrix (Linux `x86_64` + `aarch64`, macOS
+`universal2`, Windows `x64`) plus an sdist and publishes them to **PyPI via
+Trusted Publishing (OIDC — no stored token)** and the **core crate to
+crates.io**. The deprecated, laptop-bound `maturin upload` path is retired. See
+[RELEASING.md](RELEASING.md) for the runbook and the one-time Trusted Publisher
+setup.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
