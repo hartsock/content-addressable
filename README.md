@@ -169,9 +169,10 @@ changing any of them is a major version bump:
    experimental `merkle` feature. Removing or narrowing any frozen export after
    `0.1.0` is a major bump; *adding* one is allowed additively. See the
    crate-root docs (`src/lib.rs`).
-10. **SETTLED ([#9]).** **MSRV `1.81`** (inherited from the cid/multihash stack)
-    and **edition `2021`** are frozen for the `0.1.x` line, marked as policy in
-    `Cargo.toml`. A dedicated CI job pins `dtolnay/rust-toolchain@1.81`
+10. **SETTLED ([#9]).** **MSRV `1.85`** (the Rust 2024 edition baseline, required
+    transitively because `blake3 >= 1.6` pulls `cpufeatures 0.3`, an edition2024
+    crate) and **edition `2021`** are frozen for the `0.1.x` line, marked as policy in
+    `Cargo.toml`. A dedicated CI job pins `dtolnay/rust-toolchain@1.85`
     (build + test) so a transitive dependency can't raise the real floor while
     CI stays green; `Cargo.lock` is committed for reproducible resolution across
     that job and the byte-contract tests. Bumping the MSRV or edition is an

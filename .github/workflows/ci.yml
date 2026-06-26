@@ -9,9 +9,9 @@
 # cheap).
 #
 # CI-ONLY jobs (documented exceptions, NOT in the hook):
-#   - `msrv` pins `dtolnay/rust-toolchain@1.81` and runs build+test so a
+#   - `msrv` pins `dtolnay/rust-toolchain@1.85` and runs build+test so a
 #     transitive dep can't silently raise the real MSRV floor above the declared
-#     `rust-version = "1.81"` (issue #9, gate item #10). Installing a second
+#     `rust-version = "1.85"` (issue #9, gate item #10). Installing a second
 #     toolchain on every push is too heavy for a fast hook, so it is CI-only —
 #     the same rationale as the `python` job. The declared floor still lives in
 #     Cargo.toml, which the hook respects implicitly.
@@ -55,7 +55,7 @@ jobs:
         run: cargo test --all-features
 
   msrv:
-    name: msrv (1.81)
+    name: msrv (1.85)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,14 +64,14 @@ jobs:
       # SemVer-relevant change instead of a silent drift (issue #9, gate #10).
       # These commands resolve to `default-members = ["."]` (the published core
       # crate only); the PyO3 `content-addressable-py` member is NOT built here.
-      # Its PyO3/pythonize stack has its OWN, higher MSRV (currently 1.83) — the
-      # 1.81 floor is the contract of the LIBRARY that crates.io ships, not of
-      # the maturin-built extension. Keep this job scoped to the core crate.
-      - uses: dtolnay/rust-toolchain@1.81
+      # Its PyO3/pythonize stack (pyo3 0.29) needs ~1.83, below this 1.85 floor,
+      # and it is a maturin-built wheel — not the crates.io LIBRARY whose contract
+      # this 1.85 floor is. Keep this job scoped to the core crate.
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
-      - name: cargo build (MSRV 1.81, core crate)
+      - name: cargo build (MSRV 1.85, core crate)
         run: cargo build --all-targets --all-features
-      - name: cargo test (MSRV 1.81, core crate)
+      - name: cargo test (MSRV 1.85, core crate)
         run: cargo test --all-features
 
   clippy:

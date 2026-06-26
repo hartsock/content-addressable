@@ -2,7 +2,7 @@
 #
 # `just check` runs the full local gate (fmt + clippy + test + doc), the same
 # steps enforced by .githooks/pre-push and .github/workflows/ci.yml. The CI-only
-# `msrv` (1.81) and `python` (PyO3) jobs are intentionally not in `check` — see
+# `msrv` (1.85) and `python` (PyO3) jobs are intentionally not in `check` — see
 # the pre-push hook header for the rationale. Run the MSRV build with `just msrv`.
 
 # Run the full local check suite: format, lint, test, doc.
@@ -28,12 +28,12 @@ test:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
-# Build + test on the pinned MSRV (1.81). Mirrors the CI-only `msrv` job; run it
+# Build + test on the pinned MSRV (1.85). Mirrors the CI-only `msrv` job; run it
 # manually since installing a second toolchain is too heavy for the push hook.
 msrv:
-    rustup toolchain install 1.81 --profile minimal
-    cargo +1.81 build --all-targets --all-features
-    cargo +1.81 test --all-features
+    rustup toolchain install 1.85 --profile minimal
+    cargo +1.85 build --all-targets --all-features
+    cargo +1.85 test --all-features
 
 # Apply rustfmt in place.
 fmt-fix:

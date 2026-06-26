@@ -4,12 +4,12 @@
 # CI pipeline; do not bypass it with --no-verify.
 #
 # DOCUMENTED EXCEPTIONS — two CI jobs are deliberately NOT run here:
-#   - `msrv` (build+test on dtolnay/rust-toolchain@1.81): installing a second
+#   - `msrv` (build+test on dtolnay/rust-toolchain@1.85): installing a second
 #     toolchain on every push is too heavy for a fast hook, so the MSRV floor is
 #     guarded CI-only (issue #9, gate item #10). The declared floor lives in
 #     Cargo.toml's `rust-version`, which the hook respects implicitly. Run the
-#     MSRV build locally with: rustup toolchain install 1.81 &&
-#     cargo +1.81 test --all-features
+#     MSRV build locally with: rustup toolchain install 1.85 &&
+#     cargo +1.85 test --all-features
 #   - `python` (maturin build + pytest for the PyO3 face): building the
 #     extension module on every push is too heavy/fragile for a fast hook (same
 #     rationale kyln uses to keep its p4d suite out of the hook). Run it locally

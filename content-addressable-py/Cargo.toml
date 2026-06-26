@@ -10,7 +10,7 @@
 name = "content-addressable-py"
 version = "0.1.0-alpha.1"
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.85"
 license = "Apache-2.0"
 description = "Python (PyO3) bindings for the content-addressable crate."
 repository = "https://github.com/hartsock/content-addressable"

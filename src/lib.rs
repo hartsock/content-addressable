@@ -111,9 +111,11 @@
 //!
 //! # MSRV / edition policy (FROZEN at 0.1.0)
 //!
-//! - **MSRV: Rust `1.81`** (gate item #10). The floor is inherited from the
-//!   `cid` / `multihash` stack. It is declared as `rust-version = "1.81"` in
-//!   `Cargo.toml` and pinned by a dedicated CI job (`dtolnay/rust-toolchain@1.81`,
+//! - **MSRV: Rust `1.85`** (gate item #10). 1.85 is the Rust 2024 edition
+//!   baseline, pulled in transitively because `blake3 >= 1.6` depends on
+//!   `cpufeatures 0.3` (an edition2024 crate). It is declared as
+//!   `rust-version = "1.85"` in `Cargo.toml` and pinned by a dedicated CI job
+//!   (`dtolnay/rust-toolchain@1.85`,
 //!   build + test) so a transitive dependency cannot raise the real floor while
 //!   CI stays green. A bump is an **intentional, documented, SemVer-relevant**
 //!   change, never a silent side effect of `cargo update`.
