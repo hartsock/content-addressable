@@ -27,7 +27,7 @@
 //!
 //! # ⚠️ BYTES ARE NON-FROZEN (experimental, default-off feature)
 //!
-//! Unlike the frozen [`ContentId`] / [`canonical`](crate::canonical) surface,
+//! Unlike the frozen [`ContentId`] / [`canonical`] surface,
 //! **a [`MerkleNode`]'s exact serialized bytes are NOT frozen.** This module is
 //! gated behind the experimental, default-**off** `merkle` cargo feature, and
 //! its byte layout is pinned only once Merkle conformance vectors land (a

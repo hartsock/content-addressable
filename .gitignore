@@ -133,6 +133,12 @@ dmypy.json
 # Build artifacts (cargo default output dir).
 /target
 
-# This is a library: do NOT commit Cargo.lock. Applications commit it; libraries
-# leave dependency resolution to downstream consumers.
-Cargo.lock
+# Cargo.lock IS committed for this crate (issue #9, gate item #10). The usual
+# "libraries don't commit lockfiles" convention optimizes for downstream
+# resolution flexibility — which is preserved, because consumers ignore a
+# dependency's committed lock. What we gain is REPRODUCIBLE CI: the MSRV (1.81)
+# job and the byte-contract tests resolve the SAME dependency graph on every
+# run, so a transitive update can't silently move the real MSRV floor or perturb
+# canonical bytes between CI runs. For a crate whose whole purpose is
+# deterministic, self-certifying bytes, that reproducibility is worth more than
+# the convention. (So: NO `Cargo.lock` entry here.)

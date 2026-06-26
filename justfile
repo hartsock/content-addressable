@@ -1,10 +1,12 @@
 # justfile for content-addressable.
 #
-# `just check` runs the full local gate (fmt + clippy + test), the same steps
-# enforced by .githooks/pre-push and .github/workflows/ci.yml.
+# `just check` runs the full local gate (fmt + clippy + test + doc), the same
+# steps enforced by .githooks/pre-push and .github/workflows/ci.yml. The CI-only
+# `msrv` (1.85) and `python` (PyO3) jobs are intentionally not in `check` — see
+# the pre-push hook header for the rationale. Run the MSRV build with `just msrv`.
 
-# Run the full local check suite: format, lint, test.
-check: fmt clippy test
+# Run the full local check suite: format, lint, test, doc.
+check: fmt clippy test doc
 
 # Verify formatting (does not modify files).
 fmt:
@@ -21,6 +23,17 @@ clippy:
 test:
     cargo test
     cargo test --all-features
+
+# Build the docs with broken intra-doc links denied (mirrors the CI `doc` job).
+doc:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+# Build + test on the pinned MSRV (1.85). Mirrors the CI-only `msrv` job; run it
+# manually since installing a second toolchain is too heavy for the push hook.
+msrv:
+    rustup toolchain install 1.85 --profile minimal
+    cargo +1.85 build --all-targets --all-features
+    cargo +1.85 test --all-features
 
 # Apply rustfmt in place.
 fmt-fix:

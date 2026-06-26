@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# PIPELINE PARITY: mirrors the cargo fmt/clippy/test jobs in
+# PIPELINE PARITY: mirrors the cargo fmt/clippy/test/doc jobs in
 # .github/workflows/ci.yml. When editing this file, verify it still matches the
 # CI pipeline; do not bypass it with --no-verify.
 #
-# DOCUMENTED EXCEPTION: CI also has a `python` job (maturin build + pytest for
-# the PyO3 face). That is deliberately NOT run here — building the extension
-# module on every push is too heavy/fragile for a fast hook. The Python suite is
-# CI-only (same rationale kyln uses to keep its p4d suite out of the hook). Run
-# it locally with: maturin develop -m content-addressable-py/Cargo.toml && pytest
+# DOCUMENTED EXCEPTIONS — two CI jobs are deliberately NOT run here:
+#   - `msrv` (build+test on dtolnay/rust-toolchain@1.85): installing a second
+#     toolchain on every push is too heavy for a fast hook, so the MSRV floor is
+#     guarded CI-only (issue #9, gate item #10). The declared floor lives in
+#     Cargo.toml's `rust-version`, which the hook respects implicitly. Run the
+#     MSRV build locally with: rustup toolchain install 1.85 &&
+#     cargo +1.85 test --all-features
+#   - `python` (maturin build + pytest for the PyO3 face): building the
+#     extension module on every push is too heavy/fragile for a fast hook (same
+#     rationale kyln uses to keep its p4d suite out of the hook). Run it locally
+#     with: maturin develop -m content-addressable-py/Cargo.toml && pytest
+# The `doc` job IS mirrored below (rustdoc is cheap).
 set -euo pipefail
 
 echo "==> cargo fmt --check"
@@ -23,5 +30,10 @@ cargo test
 # (src/merkle.rs / MerkleNode), mirroring the CI `test` job.
 echo "==> cargo test --all-features (exercises the merkle feature)"
 cargo test --all-features
+
+# Mirrors the CI `doc` job: `-D warnings` turns broken intra-doc links into a
+# hard failure so doc rot can't return (issue #9 — API-surface hygiene).
+echo "==> RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features"
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
 echo "pre-push checks passed."
