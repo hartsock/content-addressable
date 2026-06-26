@@ -264,15 +264,22 @@ mod tests {
         assert_eq!(value, back, "a ContentId field must roundtrip via dag-cbor");
 
         // --- JSON golden ---------------------------------------------------
-        // The bundled `cid` serde impl encodes a CID as a byte-valued newtype
-        // struct, so serde_json renders the embedded link as the CID's byte
-        // array, NOT the base32 string. That byte-array form is part of the
-        // frozen contract; the base32 *string* is the Display/FromStr form.
+        // FROZEN (issue #3): in a human-readable serializer a ContentId is the
+        // multibase base32 CID string, NOT a byte array. The crate's serde impl
+        // branches on `is_human_readable` so JSON/config carry a readable,
+        // portable CID. The dag-cbor (IPLD) form above is unchanged (tag-42).
         let json = serde_json::to_string(&value).unwrap();
-        let expected_json = "{\"link\":[1,113,30,32,31,148,203,243,19,179,206,35,37,122,114,81,234,15,201,90,36,85,110,166,17,228,248,244,117,229,73,151,27,174,219,2]}";
+        let expected_json =
+            "{\"link\":\"bafyr4ia7stf7ge5tzyrsk6tskhva7sk2erkw5jqr4t4pi5pfjglrxlw3ai\"}";
         assert_eq!(
             json, expected_json,
             "frozen JSON encoding of an embedded ContentId drifted"
+        );
+        // It must round-trip through JSON too.
+        let back_json: HasLink = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value, back_json,
+            "a ContentId field must roundtrip via JSON"
         );
     }
 

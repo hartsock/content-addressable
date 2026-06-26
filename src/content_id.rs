@@ -72,32 +72,26 @@ const BLAKE3_DIGEST_LEN: usize = 32;
 ///
 /// # Serde representation (FROZEN at 0.1.0)
 ///
-/// `ContentId` serializes as its inner [`Cid`]. Two concrete forms exist,
-/// depending on the serializer, and **both are a stability contract across the
-/// entire `0.1.x` line** — changing either is a **major version bump**. The
-/// committed golden vectors (`tests/vectors.json`) plus the in-crate golden
-/// test pin these exact bytes so a dependency bump cannot silently perturb
-/// them:
+/// `ContentId` has two serde forms, chosen by the serializer via
+/// `is_human_readable`, and **both are a stability contract across the entire
+/// `0.1.x` line** — changing either is a **major version bump**. The committed
+/// golden vectors (`tests/vectors.json`) plus the in-crate golden test pin
+/// these exact bytes so a dependency bump cannot silently perturb them:
 ///
-/// - **Binary / dag-cbor form: a tag-42 link.** Through
+/// - **Binary / IPLD form (e.g. dag-cbor): a tag-42 link.** Through
 ///   [`serde_ipld_dagcbor`] a `ContentId` is encoded as a CBOR **tag-42 link**
 ///   (major-type-6 head `0xd8 0x2a`, then a byte string carrying the `0x00`
 ///   multibase-identity prefix followed by the CID binary form). This is the
 ///   natural IPLD encoding and makes `ContentId` fields inside other
 ///   content-addressed structures behave as real links — the crate's
 ///   IPLD-native thesis. See [`canonical`](crate::canonical).
-/// - **Human-readable text form: the multibase base32-lower string.**
-///   [`Display`](fmt::Display) and [`FromStr`] render/parse the inner CID's
-///   default multibase string (the `b…` base32-lower form for CIDv1). This is
-///   the canonical *text* form of an id.
-///
-/// Note on `serde_json` and other non-IPLD serializers: the bundled `cid`
-/// serde impl encodes a CID as a byte-valued newtype struct, so a `ContentId`
-/// field serialized with `serde_json` is the CID's **byte array**
-/// (`[1, 113, 30, …]`), *not* the base32 text string. That byte-array form is
-/// likewise frozen; use [`Display`](fmt::Display)/[`FromStr`] when a base32
-/// *string* is wanted. (The base32 string is the multibase text form; the JSON
-/// byte array is the same CID rendered through serde's generic byte path.)
+/// - **Human-readable form (e.g. `serde_json`, TOML): the multibase base32
+///   string.** In a human-readable serializer a `ContentId` is the
+///   base32-lower `b…` CID string — the same text
+///   [`Display`](fmt::Display)/[`FromStr`] produce — so JSON and config files
+///   carry a readable, portable CID rather than a raw byte array. The crate
+///   adds a thin `is_human_readable` branch over the inner `Cid` to guarantee
+///   this; the IPLD/binary path is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContentId(Cid);
 
@@ -189,23 +183,37 @@ impl FromStr for ContentId {
 }
 
 impl Serialize for ContentId {
-    /// Serialize as the inner [`Cid`], yielding a dag-cbor tag-42 link.
+    /// Serialize per the frozen serde contract: the multibase base32 string in
+    /// human-readable formats (e.g. `serde_json`, TOML), the inner [`Cid`] (a
+    /// dag-cbor tag-42 link) in binary/IPLD formats.
     ///
     /// This representation is **frozen** for the `0.1.x` line; see the
     /// [type-level serde contract](ContentId#serde-representation-frozen-at-010).
     /// Changing it is a major version bump.
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_string())
+        } else {
+            self.0.serialize(serializer)
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for ContentId {
-    /// Deserialize the inner [`Cid`] from a dag-cbor tag-42 link.
+    /// Deserialize per the frozen serde contract: a multibase base32 string from
+    /// human-readable formats, the inner [`Cid`] (a dag-cbor tag-42 link) from
+    /// binary/IPLD formats.
     ///
     /// The accepted representation is **frozen** for the `0.1.x` line; see the
     /// [type-level serde contract](ContentId#serde-representation-frozen-at-010).
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Cid::deserialize(deserializer).map(ContentId)
+        if deserializer.is_human_readable() {
+            let s = String::deserialize(deserializer)?;
+            s.parse::<ContentId>()
+                .map_err(<D::Error as serde::de::Error>::custom)
+        } else {
+            Cid::deserialize(deserializer).map(ContentId)
+        }
     }
 }
 
