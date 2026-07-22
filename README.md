@@ -300,6 +300,35 @@ CI and the pre-push hook run `--all-features`, so the feature is exercised on
 every push while the plain `cargo test` keeps the default surface green (and
 proves `merkle` stays off by default).
 
+### The `store` feature — the CID-addressed node-store seam (experimental)
+
+A default-**off** cargo feature, `store`, gates `src/store.rs`: the narrow seam
+every Merkle-catalog structure (epic #30) traverses. Backends implement only a
+raw fetch + put (`NodeStore`); the **verified** operations live in
+`NodeStoreExt`, a blanket-implemented extension trait sealed by coherence, so
+no backend can opt out of verify-on-read — a tampered or substituted node
+surfaces as `VerificationFailed`, never as wrong bytes:
+
+```rust
+use content_addressable::store::{MemoryStore, NodeStore as _, NodeStoreExt as _};
+
+let mut s = MemoryStore::new();               // grow-only reference backend
+let canonical = [0xa0];                       // canonical dag-cbor (empty map)
+let id = s.put(&canonical).unwrap();          // id derived FROM the bytes
+assert_eq!(s.get(&id).unwrap(), canonical);   // verified read (sealed path)
+```
+
+(`store::get_typed` / `store::put_node` add the typed layer: verified read +
+canonical decode, and `canonical_form` + put — see the module docs.)
+
+The seam's laws (put derives the address; verify-on-read soundness for
+arbitrary backends; grow-only monotonicity) are stated in the module docs and
+enforced by tests, including adversarial-backend tests. The trait API is
+**NON-FROZEN** while the catalog stabilizes; the seam defines no wire bytes of
+its own, so it adds nothing to `tests/vectors.json`. With `merkle` also
+enabled, a whole `MerkleNode` DAG reconstructs from *(root CID, store)* alone —
+see the `store` + `merkle` integration tests.
+
 #### Byte-parity gate (`tests/vectors.json`)
 
 A single shared golden-vector file, `tests/vectors.json`, is generated *from the

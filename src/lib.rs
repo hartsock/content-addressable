@@ -130,6 +130,8 @@ pub mod content_id;
 pub mod error;
 #[cfg(feature = "merkle")]
 pub mod merkle;
+#[cfg(feature = "store")]
+pub mod store;
 pub mod trait_def;
 
 // FROZEN crate-root re-export surface (gate item #9) — see the "Public API
@@ -141,6 +143,8 @@ pub use content_id::ContentId;
 pub use error::ContentError;
 #[cfg(feature = "merkle")]
 pub use merkle::MerkleNode;
+#[cfg(feature = "store")]
+pub use store::{MemoryStore, NodeStore, NodeStoreExt, StoreError};
 pub use trait_def::ContentAddressable;
 
 #[cfg(test)]
