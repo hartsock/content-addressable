@@ -90,6 +90,21 @@ Epic #17 freezes the identity layer (`ContentId` bytes, canonical dag-cbor, the 
 - Phases 3–4 start as core structures prove the seams. Invented structures (label `speculative`) may be re-scoped or closed on evidence — they are hypotheses, not commitments.
 - A structure's bytes freeze **only** when its vectors land in the Merkle-vectors gate. Until then its layout may change without a breaking-change ceremony.
 
+## Release ladder & audit cadence (approved 2026-07-21)
+
+**Careful and deeply tested — audit passes are built into the process, not appended to it.**
+
+- **`0.0.1` → `0.0.99`**: micro-releases, one or a few catalog slices each, until the catalog is complete. The existing `0.1.0-alpha.1` on crates.io/PyPI is a prerelease, which resolvers ignore by default, so the `0.0.x` stable-channel line is the one adopters get. The byte-freeze work (#17) lands *during* this line.
+- **`0.1.0` = catalog complete**: every Phase 0–3 issue closed, vectors landed, Rust + Python parity green. (This re-maps #17's "0.1.0-rc1" label: `0.1.0` now names catalog-completeness, not just the byte freeze.)
+- **`0.1.x` → `0.999.x`**: sister languages (TypeScript, Dart, Java — #35) plus hardening, until the fundamentals are fully baked and invariant.
+- **`1.0.0` = rock solid.** Nothing ships in 1.0.0 that hasn't survived the full audit cadence below.
+
+**Audit cadence:**
+1. **Per PR** — adversarial audit pass (independent review agents: correctness, security, simplification) *before* review is requested; findings fixed or explicitly waived in the PR body.
+2. **Per release (each 0.0.x)** — full `just check` + property suites + vector parity + benchmark smoke; release notes name what froze, if anything.
+3. **Per phase boundary** — catalog-wide audit: documentation audit against code reality, security review, coverage ratchet check, and a "what's missing" completeness critic.
+4. **Per version-line boundary (0.1.0, 1.0.0)** — external-quality bar: fuzz corpora replayed, cross-language vectors replayed on every supported target, formal obligations (Lean/TLA+) all green.
+
 ## Exit criteria
 
 - [ ] Every Phase 0–2 issue closed; Phase 3 issues closed or explicitly re-scoped.
