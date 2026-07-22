@@ -8,9 +8,7 @@
 //! the `store`+`merkle` (root CID, store)-determines-the-DAG integration.
 #![cfg(feature = "store")]
 
-use content_addressable::store::{
-    get_typed, put_node, MemoryStore, NodeStore, NodeStoreExt, StoreError,
-};
+use content_addressable::store::{MemoryStore, NodeStore, NodeStoreExt, StoreError};
 use content_addressable::{canonical, ContentAddressable, ContentError, ContentId};
 
 /// Canonical dag-cbor bytes for a small map value, via the crate's own
@@ -58,12 +56,46 @@ fn put_node_equals_content_id() {
     }
     let mut store = MemoryStore::new();
     let rec = Rec { k: "value".into() };
-    let via_store = put_node(&mut store, &rec).expect("put_node succeeds");
+    let via_store = store.put_node(&rec).expect("put_node succeeds");
     let via_trait = rec.content_id().expect("content_id succeeds");
     assert_eq!(
         via_store, via_trait,
         "put_node(n) must equal n.content_id()"
     );
+}
+
+/// A backend whose `insert` is a **no-op** — it silently drops every write.
+/// Used to prove PO-STORE-1 is *sealed*: the id `put`/`put_node` return is
+/// derived by the seam, so it is correct even when the backend stores nothing
+/// (the write is then simply unretrievable — never mis-identified).
+#[derive(Default)]
+struct DroppingStore;
+
+impl NodeStore for DroppingStore {
+    fn get_unverified(&self, id: &ContentId) -> Result<Vec<u8>, StoreError> {
+        Err(StoreError::NotFound(*id))
+    }
+    fn insert(&mut self, _id: ContentId, _bytes: &[u8]) -> Result<(), StoreError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn put_id_is_seam_derived_not_backend_minted() {
+    // PO-STORE-1 sealing: a backend cannot influence the returned id, because
+    // the seam derives it and only hands `insert` the result. Even a backend
+    // that drops the write returns the exact content-derived id.
+    let mut store = DroppingStore;
+    let bytes = canonical_map(1);
+    let id = store.put(&bytes).expect("put succeeds");
+    assert_eq!(
+        id,
+        ContentId::from_canonical_bytes(&bytes),
+        "the id must be the seam's derivation, regardless of the backend"
+    );
+    // And because the backend dropped it, the (correct) id is simply not found
+    // — never resolved to wrong bytes.
+    assert!(matches!(store.get(&id), Err(StoreError::NotFound(_))));
 }
 
 // ---------------------------------------------------------------- round-trip
@@ -84,7 +116,7 @@ fn get_typed_round_trips_a_value() {
         serde_json::from_value(serde_json::json!({"alpha": 1, "zeta": 26})).expect("json -> ipld");
     let bytes = canonical::to_canonical_dagcbor(&ipld).expect("encode");
     let id = store.put(&bytes).expect("put succeeds");
-    let back: ipld_core::ipld::Ipld = get_typed(&store, &id).expect("get_typed succeeds");
+    let back: ipld_core::ipld::Ipld = store.get_typed(&id).expect("get_typed succeeds");
     assert_eq!(back, ipld, "get_typed must decode the stored value");
 }
 
@@ -95,7 +127,9 @@ fn get_typed_surfaces_decode_failure_for_wrong_type() {
     // value.
     let mut store = MemoryStore::new();
     let id = store.put(&canonical_map(1)).expect("put succeeds");
-    let err = get_typed::<u64>(&store, &id).expect_err("wrong type must fail to decode");
+    let err = store
+        .get_typed::<u64>(&id)
+        .expect_err("wrong type must fail to decode");
     assert!(
         matches!(err, StoreError::Content(ContentError::DecodingError { .. })),
         "wrong-type decode must surface as Content(DecodingError), got {err:?}"
@@ -130,8 +164,8 @@ impl NodeStore for SubstitutingStore {
     fn get_unverified(&self, _id: &ContentId) -> Result<Vec<u8>, StoreError> {
         Ok(self.wrong_bytes.clone())
     }
-    fn put(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError> {
-        Ok(ContentId::from_canonical_bytes(bytes))
+    fn insert(&mut self, _id: ContentId, _bytes: &[u8]) -> Result<(), StoreError> {
+        Ok(())
     }
 }
 
@@ -147,8 +181,8 @@ impl NodeStore for CorruptingStore {
         *bytes.last_mut().expect("stored nodes are non-empty") ^= 0x01;
         Ok(bytes)
     }
-    fn put(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError> {
-        self.inner.put(bytes)
+    fn insert(&mut self, id: ContentId, bytes: &[u8]) -> Result<(), StoreError> {
+        self.inner.insert(id, bytes)
     }
 }
 
@@ -314,9 +348,9 @@ fn hand_rolled_value_sweep_holds_the_laws() {
 #[test]
 fn node_store_is_dyn_compatible_and_gets_ext_methods() {
     // Compile-time + runtime lock (in the spirit of the ContentError
-    // Send+Sync lock): Box<dyn NodeStore> must be a valid type, receive
-    // the sealed NodeStoreExt methods through the blanket impl, and work
-    // with the free functions.
+    // Send+Sync lock): Box<dyn NodeStore> must be a valid type and receive
+    // EVERY NodeStoreExt method — including the generic get_typed/put_node —
+    // through the blanket impl, despite NodeStore's own object-safety.
     let mut boxed: Box<dyn NodeStore> = Box::new(MemoryStore::new());
     let bytes = canonical_map(11);
     let id = boxed.put(&bytes).expect("put through dyn");
@@ -325,8 +359,7 @@ fn node_store_is_dyn_compatible_and_gets_ext_methods() {
         bytes,
         "NodeStoreExt::get must work on dyn NodeStore"
     );
-    let back: ipld_core::ipld::Ipld =
-        get_typed(&*boxed, &id).expect("get_typed over dyn NodeStore");
+    let back: ipld_core::ipld::Ipld = boxed.get_typed(&id).expect("get_typed over dyn NodeStore");
     let reencoded = canonical::to_canonical_dagcbor(&back).expect("re-encode");
     assert_eq!(reencoded, bytes, "typed read round-trips through dyn");
     boxed
@@ -377,7 +410,7 @@ mod merkle_integration {
         if out.contains_key(root) {
             return Ok(());
         }
-        let node: MerkleNode<String> = get_typed(store, root)?;
+        let node: MerkleNode<String> = store.get_typed(root)?;
         assert!(
             node.verify(root).expect("verify runs"),
             "every reconstructed node must verify against the id that named it"
@@ -395,13 +428,13 @@ mod merkle_integration {
         let mut store = MemoryStore::new();
 
         let a = MerkleNode::genesis("a".to_string());
-        let a_id = put_node(&mut store, &a).expect("put a");
+        let a_id = store.put_node(&a).expect("put a");
         let b = MerkleNode::new("b".to_string(), [a_id]);
-        let b_id = put_node(&mut store, &b).expect("put b");
+        let b_id = store.put_node(&b).expect("put b");
         let c = MerkleNode::new("c".to_string(), [a_id]);
-        let c_id = put_node(&mut store, &c).expect("put c");
+        let c_id = store.put_node(&c).expect("put c");
         let d = MerkleNode::new("d".to_string(), [b_id, c_id]);
-        let d_id = put_node(&mut store, &d).expect("put d");
+        let d_id = store.put_node(&d).expect("put d");
 
         // From the root id + the store ALONE, the whole DAG comes back.
         let mut recovered = BTreeMap::new();
@@ -421,9 +454,9 @@ mod merkle_integration {
         // return a partial DAG.
         let mut full = MemoryStore::new();
         let a = MerkleNode::genesis("a".to_string());
-        let a_id = put_node(&mut full, &a).expect("put a");
+        let a_id = full.put_node(&a).expect("put a");
         let b = MerkleNode::new("b".to_string(), [a_id]);
-        let b_id = put_node(&mut full, &b).expect("put b");
+        let b_id = full.put_node(&b).expect("put b");
 
         let mut partial = MemoryStore::new();
         let b_bytes = b.canonical_form().expect("encode b");
@@ -451,7 +484,9 @@ fn put_node_propagates_encoding_failure() {
         }
     }
     let mut store = MemoryStore::new();
-    let err = put_node(&mut store, &Unencodable).expect_err("NaN must fail to encode");
+    let err = store
+        .put_node(&Unencodable)
+        .expect_err("NaN must fail to encode");
     assert!(
         matches!(err, StoreError::Content(ContentError::EncodingError { .. })),
         "encoding failure must surface as Content(EncodingError), got {err:?}"

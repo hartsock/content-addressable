@@ -310,16 +310,19 @@ no backend can opt out of verify-on-read — a tampered or substituted node
 surfaces as `VerificationFailed`, never as wrong bytes:
 
 ```rust
-use content_addressable::store::{MemoryStore, NodeStore as _, NodeStoreExt as _};
+use content_addressable::store::{MemoryStore, NodeStoreExt as _};
 
 let mut s = MemoryStore::new();               // grow-only reference backend
 let canonical = [0xa0];                       // canonical dag-cbor (empty map)
-let id = s.put(&canonical).unwrap();          // id derived FROM the bytes
+let id = s.put(&canonical).unwrap();          // id derived BY THE SEAM
 assert_eq!(s.get(&id).unwrap(), canonical);   // verified read (sealed path)
 ```
 
-(`store::get_typed` / `store::put_node` add the typed layer: verified read +
-canonical decode, and `canonical_form` + put — see the module docs.)
+Identity derivation lives entirely in the sealed `NodeStoreExt`: a backend
+implements only the two dumb operations (`get_unverified` and `insert` at a
+seam-supplied id), so it can never mint or rebind an id, nor skip verify-on-read.
+The typed doors `s.put_node(&node)` / `s.get_typed::<T>(&id)` add
+`canonical_form` + put and verified read + decode.
 
 The seam's laws (put derives the address; verify-on-read soundness for
 arbitrary backends; grow-only monotonicity) are stated in the module docs and

@@ -97,6 +97,13 @@
 //! - [`MerkleNode`] — re-exported **only** when the default-off, experimental
 //!   `merkle` feature is enabled; its bytes are not yet frozen (see [`merkle`]).
 //!
+//! The default-off, experimental **`store`** feature adds a further set of
+//! re-exports (`NodeStore`, `NodeStoreExt`, `MemoryStore`, `StoreError` — see
+//! [`store`]). Like `MerkleNode`, these are **not part of the frozen `0.1.0`
+//! surface**: the seam's trait API may change until the catalog stabilizes, so
+//! it is enumerated here for completeness but explicitly excluded from the
+//! stability contract above.
+//!
 //! The codec/hash codes [`DAG_CBOR_CODEC`](content_id::DAG_CBOR_CODEC) /
 //! [`BLAKE3_HASH_CODE`](content_id::BLAKE3_HASH_CODE) stay `pub` inside
 //! [`content_id`] (so `content_addressable::content_id::DAG_CBOR_CODEC`

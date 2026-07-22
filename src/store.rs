@@ -33,10 +33,14 @@
 //! pinned by the frozen v1 CID profile, which already self-describes codec +
 //! hash, so the laws never name a hash function:
 //!
-//! - **PO-STORE-1 (put derives the address) \[Lean\]** — `put(b)` returns
-//!   exactly [`ContentId::from_canonical_bytes`]`(b)` for canonical `b`;
-//!   consequently [`put_node`]`(n)` equals `n.content_id()`. The store never
-//!   mints or rebinds identity; addressing is a pure function of content.
+//! - **PO-STORE-1 (put derives the address) \[Lean\]** — [`NodeStoreExt::put`]`(b)`
+//!   returns exactly [`ContentId::from_canonical_bytes`]`(b)` for canonical `b`;
+//!   consequently [`put_node`](NodeStoreExt::put_node)`(n)` equals
+//!   `n.content_id()`. Like verify-on-read, this is **sealed**: the id is
+//!   derived in the blanket-implemented extension, and the backend's only write
+//!   op ([`insert`](NodeStore::insert)) is handed that id — it never computes
+//!   one, so no backend can mint or rebind identity. Addressing is a pure
+//!   function of content.
 //! - **PO-STORE-2 (verify-on-read soundness) \[Lean\]** — for **any** backend
 //!   `get_unverified`, including an adversarial one,
 //!   [`NodeStoreExt::get`]`(id)` returns `Ok(b)` only if
@@ -69,7 +73,7 @@
 //! # Example
 //!
 //! ```
-//! use content_addressable::store::{self, MemoryStore, NodeStoreExt as _};
+//! use content_addressable::store::{MemoryStore, NodeStoreExt as _};
 //! use content_addressable::{canonical, ContentAddressable, ContentError};
 //! use serde::{Deserialize, Serialize};
 //!
@@ -87,12 +91,12 @@
 //! let mut store = MemoryStore::new();
 //! let record = Record { name: "alpha".into() };
 //!
-//! // The store derives the address from the content (PO-STORE-1)...
-//! let id = store::put_node(&mut store, &record).unwrap();
+//! // The seam derives the address from the content (PO-STORE-1)...
+//! let id = store.put_node(&record).unwrap();
 //! assert_eq!(id, record.content_id().unwrap());
 //!
 //! // ...and the verified read hands back exactly what the id names.
-//! let back: Record = store::get_typed(&store, &id).unwrap();
+//! let back: Record = store.get_typed(&id).unwrap();
 //! assert_eq!(back, record);
 //! ```
 //!
@@ -140,7 +144,7 @@ pub enum StoreError {
     /// [`ContentError::VerificationFailed`] here on a tampered read;
     /// [`NodeStoreExt::put_checked`] produces
     /// [`ContentError::NonCanonical`] / [`ContentError::DecodingError`] on bad
-    /// ingest; [`put_node`] propagates encoding failures.
+    /// ingest; [`put_node`](NodeStoreExt::put_node) propagates encoding failures.
     #[error(transparent)]
     Content(#[from] ContentError),
 }
@@ -169,38 +173,44 @@ pub trait NodeStore {
     /// additively (the enum is `#[non_exhaustive]` for exactly that).
     fn get_unverified(&self, id: &ContentId) -> Result<Vec<u8>, StoreError>;
 
-    /// Store canonical dag-cbor bytes; returns the derived id.
+    /// Store `bytes` **at the seam-derived `id`** — a dumb write.
     ///
-    /// The id **must** be exactly [`ContentId::from_canonical_bytes`]`(bytes)`
-    /// (PO-STORE-1): the store never mints identity, it materializes the
-    /// identity the bytes already have.
+    /// The backend does **not** compute the id: the sealed [`NodeStoreExt::put`]
+    /// derives it with [`ContentId::from_canonical_bytes`] and hands both here.
+    /// This is what makes PO-STORE-1 **sealed** rather than aspirational — a
+    /// backend cannot mint or rebind identity because it never derives one, it
+    /// only files bytes under the id it is told. (Contrast PO-STORE-2, sealed
+    /// the same way: the backend does the dumb fetch, the seam does the check.)
     ///
-    /// # Precondition
+    /// # Grow-only (PO-STORE-3)
     ///
-    /// `bytes` are canonical dag-cbor — normally guaranteed by construction
-    /// via [`put_node`] (which encodes through
-    /// [`canonical_form`](crate::ContentAddressable::canonical_form)). For
-    /// foreign bytes you did not canonicalize yourself, use
-    /// [`NodeStoreExt::put_checked`], mirroring the crate's
-    /// [`from_canonical_bytes`](ContentId::from_canonical_bytes) /
-    /// [`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked)
-    /// constructor pair.
+    /// The mapping must be **write-once**: if `id` is already present, keep the
+    /// existing bytes (they are equal by construction, absent a hash collision)
+    /// rather than rebinding. There is no deletion.
     ///
     /// # Errors
     ///
     /// Infallible for [`MemoryStore`]; fallible backends surface failures
     /// through additively-added variants.
-    fn put(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError>;
+    fn insert(&mut self, id: ContentId, bytes: &[u8]) -> Result<(), StoreError>;
 }
 
-/// Verified operations over any [`NodeStore`] — the methods structures call.
+/// The operations structures actually call: verified reads and
+/// identity-deriving writes over any [`NodeStore`].
 ///
 /// Blanket-implemented for every `NodeStore` and **sealed by coherence**: the
 /// blanket impl below is necessarily the *only* impl (any other would overlap
-/// it), so no backend can supply its own body for [`get`](Self::get) or
-/// [`put_checked`](Self::put_checked). This — not a provided method, which
-/// implementors *can* override — is what makes PO-STORE-2 hold for arbitrary,
-/// even adversarial, backends.
+/// it), so no backend can supply its own body for these methods. Identity —
+/// both deriving it on write ([`put`](Self::put)) and checking it on read
+/// ([`get`](Self::get)) — lives here, never in a backend, so PO-STORE-1 and
+/// PO-STORE-2 hold for arbitrary, even adversarial, backends. (A *provided*
+/// trait method would not do: implementors can override those.)
+///
+/// The typed doors [`get_typed`](Self::get_typed) / [`put_node`](Self::put_node)
+/// are generic methods here rather than free functions: [`NodeStore`] itself
+/// stays object-safe (its two methods are non-generic), and `dyn NodeStore`
+/// still receives every method on this trait through the blanket impl — a
+/// generic method on an extension trait costs no object-safety on the base.
 pub trait NodeStoreExt: NodeStore {
     /// **Verified** fetch: re-derives the id from the fetched bytes and
     /// requires it to equal `id`.
@@ -215,27 +225,6 @@ pub trait NodeStoreExt: NodeStore {
     /// - [`StoreError::Content`] wrapping
     ///   [`ContentError::VerificationFailed`] (with both ids' canonical `b…`
     ///   strings) if the fetched bytes do not re-derive `id` (PO-STORE-2).
-    fn get(&self, id: &ContentId) -> Result<Vec<u8>, StoreError>;
-
-    /// Opt-in **strict ingest** for untrusted bytes: verifies the bytes are
-    /// canonical dag-cbor (round-trip check) before storing.
-    ///
-    /// On success the returned id is byte-identical to what
-    /// [`put`](NodeStore::put) would have returned — the check changes the
-    /// fallibility, never the id (the same relationship the
-    /// [`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked)
-    /// door has to its unchecked sibling).
-    ///
-    /// # Errors
-    ///
-    /// - [`StoreError::Content`] wrapping [`ContentError::DecodingError`]
-    ///   (not dag-cbor at all) or [`ContentError::NonCanonical`] (valid CBOR,
-    ///   wrong encoding).
-    /// - Any error from the underlying [`put`](NodeStore::put).
-    fn put_checked(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError>;
-}
-
-impl<S: NodeStore + ?Sized> NodeStoreExt for S {
     fn get(&self, id: &ContentId) -> Result<Vec<u8>, StoreError> {
         let bytes = self.get_unverified(id)?;
         let computed = ContentId::from_canonical_bytes(&bytes);
@@ -249,51 +238,77 @@ impl<S: NodeStore + ?Sized> NodeStoreExt for S {
         }
     }
 
+    /// Derive the id from `bytes` and store them; returns the derived id.
+    ///
+    /// The id is [`ContentId::from_canonical_bytes`]`(bytes)` — computed **by
+    /// the seam, not the backend** (PO-STORE-1). Precondition: `bytes` are
+    /// canonical dag-cbor (normally guaranteed via [`put_node`](Self::put_node)).
+    /// For foreign bytes, use [`put_checked`](Self::put_checked).
+    ///
+    /// # Errors
+    ///
+    /// Any error from the backend [`insert`](NodeStore::insert).
+    fn put(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError> {
+        let id = ContentId::from_canonical_bytes(bytes);
+        self.insert(id, bytes)?;
+        Ok(id)
+    }
+
+    /// Opt-in **strict ingest** for untrusted bytes: verifies the bytes are
+    /// canonical dag-cbor (round-trip check) before storing.
+    ///
+    /// On success the returned id is byte-identical to what
+    /// [`put`](Self::put) would return — the check changes the fallibility,
+    /// never the id (the same relationship the
+    /// [`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked)
+    /// door has to its unchecked sibling).
+    ///
+    /// # Errors
+    ///
+    /// - [`StoreError::Content`] wrapping [`ContentError::DecodingError`] (not
+    ///   dag-cbor at all), [`ContentError::NonCanonical`] (valid CBOR, wrong
+    ///   encoding), or [`ContentError::EncodingError`] (the decoded value fails
+    ///   to re-encode) — the full error set of
+    ///   [`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked).
+    /// - Any error from the backend [`insert`](NodeStore::insert).
     fn put_checked(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError> {
-        // Prove canonicality first (typed rejection for foreign bytes), then
-        // store through the ordinary door. The two doors agree on the id by
-        // PO-STORE-1 — a law test, not an inline assert, holds that line.
-        ContentId::from_canonical_bytes_checked(bytes)?;
-        self.put(bytes)
+        let id = ContentId::from_canonical_bytes_checked(bytes)?;
+        self.insert(id, bytes)?;
+        Ok(id)
+    }
+
+    /// Fetch through the **verified** read path and decode as a `T`.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`get`](Self::get) can return, plus [`StoreError::Content`]
+    /// wrapping [`ContentError::DecodingError`] if the (verified) bytes do not
+    /// decode as a `T`.
+    fn get_typed<T: DeserializeOwned>(&self, id: &ContentId) -> Result<T, StoreError> {
+        let bytes = self.get(id)?;
+        canonical::from_canonical_dagcbor(&bytes).map_err(StoreError::from)
+    }
+
+    /// Encode a [`ContentAddressable`] node canonically and store it.
+    ///
+    /// The returned id equals `node.content_id()` (PO-STORE-1): storing a value
+    /// and addressing a value are the same pure function of its content.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Content`] wrapping an encoding failure from
+    /// [`canonical_form`](crate::ContentAddressable::canonical_form), or any
+    /// error from the backend [`insert`](NodeStore::insert).
+    fn put_node<T: ContentAddressable + ?Sized>(
+        &mut self,
+        node: &T,
+    ) -> Result<ContentId, StoreError> {
+        let bytes = node.canonical_form()?;
+        self.put(&bytes)
     }
 }
 
-/// Fetch and decode a typed node through the **verified** read path.
-///
-/// A free function (kept off the traits so [`NodeStore`] stays dyn-compatible),
-/// reached as `store::get_typed` — one name per function, matching the
-/// [`canonical`] module's convention.
-///
-/// # Errors
-///
-/// Everything [`NodeStoreExt::get`] can return, plus [`StoreError::Content`]
-/// wrapping [`ContentError::DecodingError`] if the (verified) bytes do not
-/// decode as a `T`.
-pub fn get_typed<T: DeserializeOwned>(
-    store: &(impl NodeStore + ?Sized),
-    id: &ContentId,
-) -> Result<T, StoreError> {
-    let bytes = store.get(id)?;
-    canonical::from_canonical_dagcbor(&bytes).map_err(StoreError::from)
-}
-
-/// Encode a node canonically and store it, returning its [`ContentId`].
-///
-/// The returned id equals `node.content_id()` (PO-STORE-1): storing a value
-/// and addressing a value are the same pure function of its content.
-///
-/// # Errors
-///
-/// [`StoreError::Content`] wrapping an encoding failure from
-/// [`canonical_form`](crate::ContentAddressable::canonical_form), or any error
-/// from the underlying [`put`](NodeStore::put).
-pub fn put_node<T: ContentAddressable>(
-    store: &mut (impl NodeStore + ?Sized),
-    node: &T,
-) -> Result<ContentId, StoreError> {
-    let bytes = node.canonical_form()?;
-    store.put(&bytes)
-}
+impl<S: NodeStore + ?Sized> NodeStoreExt for S {}
 
 /// The in-memory reference backend: a grow-only `id → bytes` map.
 ///
@@ -334,12 +349,11 @@ impl NodeStore for MemoryStore {
         self.nodes.get(id).cloned().ok_or(StoreError::NotFound(*id))
     }
 
-    fn put(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError> {
-        let id = ContentId::from_canonical_bytes(bytes);
-        // Grow-only (PO-STORE-3): first write wins; re-putting the same bytes
-        // (the only way to reach an occupied key, absent a hash collision) is
-        // a no-op rather than a rebind.
+    fn insert(&mut self, id: ContentId, bytes: &[u8]) -> Result<(), StoreError> {
+        // Grow-only, write-once (PO-STORE-3): first write wins; a repeat write
+        // of an occupied id (reachable only by re-storing equal bytes, absent a
+        // hash collision) is a no-op, never a rebind.
         self.nodes.entry(id).or_insert_with(|| bytes.to_vec());
-        Ok(id)
+        Ok(())
     }
 }
