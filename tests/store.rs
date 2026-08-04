@@ -8,7 +8,9 @@
 //! the `store`+`merkle` (root CID, store)-determines-the-DAG integration.
 #![cfg(feature = "store")]
 
-use content_addressable::store::{MemoryStore, NodeStore, NodeStoreExt, StoreError};
+use content_addressable::store::{
+    MemoryStore, NodeStore, NodeStoreExt, StoreError, StoreOperation,
+};
 use content_addressable::{canonical, ContentAddressable, ContentError, ContentId};
 
 /// Canonical dag-cbor bytes for a small map value, via the crate's own
@@ -110,30 +112,89 @@ fn get_returns_exactly_what_was_put() {
 }
 
 #[test]
-fn get_typed_round_trips_a_value() {
+fn decode_verified_bytes_round_trips_a_value() {
     let mut store = MemoryStore::new();
     let ipld: ipld_core::ipld::Ipld =
         serde_json::from_value(serde_json::json!({"alpha": 1, "zeta": 26})).expect("json -> ipld");
     let bytes = canonical::to_canonical_dagcbor(&ipld).expect("encode");
     let id = store.put(&bytes).expect("put succeeds");
-    let back: ipld_core::ipld::Ipld = store.get_typed(&id).expect("get_typed succeeds");
-    assert_eq!(back, ipld, "get_typed must decode the stored value");
+    let back: ipld_core::ipld::Ipld = store
+        .decode_verified_bytes(&id)
+        .expect("decode_verified_bytes succeeds");
+    assert_eq!(back, ipld, "must decode the stored value");
 }
 
 #[test]
-fn get_typed_surfaces_decode_failure_for_wrong_type() {
+fn decode_verified_bytes_surfaces_decode_failure_for_wrong_type() {
     // Verified bytes that are a map do not decode as a u64: the error must
     // be a DecodingError inside StoreError::Content, not a panic or wrong
     // value.
     let mut store = MemoryStore::new();
     let id = store.put(&canonical_map(1)).expect("put succeeds");
     let err = store
-        .get_typed::<u64>(&id)
+        .decode_verified_bytes::<u64>(&id)
         .expect_err("wrong type must fail to decode");
     assert!(
         matches!(err, StoreError::Content(ContentError::DecodingError { .. })),
         "wrong-type decode must surface as Content(DecodingError), got {err:?}"
     );
+}
+
+/// A type whose deserialization is LOSSY: it decodes from a larger canonical map
+/// but drops the unknown key, so it re-encodes to *different* bytes — a different
+/// CID. The review's central bug (#3).
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct OnlyAlpha {
+    alpha: u64,
+}
+impl ContentAddressable for OnlyAlpha {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(self)
+    }
+}
+
+#[test]
+fn get_node_rejects_a_lossy_decode_that_decode_verified_bytes_would_admit() {
+    // A canonical map {"alpha":1,"zeta":26} has CID `id`. `OnlyAlpha` decodes it
+    // (dropping "zeta"), but re-encodes to {"alpha":1} — CID `id' != id`.
+    let mut store = MemoryStore::new();
+    let ipld: ipld_core::ipld::Ipld =
+        serde_json::from_value(serde_json::json!({"alpha": 1, "zeta": 26})).expect("json -> ipld");
+    let bytes = canonical::to_canonical_dagcbor(&ipld).expect("encode");
+    let id = store.put(&bytes).expect("put succeeds");
+
+    // Lenient door: decodes, silently dropping `zeta` — the value is NOT named by `id`.
+    let lossy: OnlyAlpha = store
+        .decode_verified_bytes(&id)
+        .expect("lenient decode admits the lossy value");
+    assert_eq!(lossy, OnlyAlpha { alpha: 1 });
+    assert_ne!(
+        lossy.content_id().expect("cid"),
+        id,
+        "the decoded value's own CID differs from the id it was read under"
+    );
+
+    // Strict door: `get_node` re-encodes and rejects the identity mismatch.
+    let err = store
+        .get_node::<OnlyAlpha>(&id)
+        .expect_err("a lossy round-trip must be rejected by the identity-preserving read");
+    assert!(
+        matches!(
+            err,
+            StoreError::Content(ContentError::VerificationFailed { .. })
+        ),
+        "get_node must reject a value that re-encodes to a different CID, got {err:?}"
+    );
+}
+
+#[test]
+fn get_node_round_trips_an_identity_preserving_value() {
+    // A value whose canonical form is exactly the stored bytes round-trips cleanly.
+    let mut store = MemoryStore::new();
+    let v = OnlyAlpha { alpha: 7 };
+    let id = store.put_node(&v).expect("put_node");
+    let back: OnlyAlpha = store.get_node(&id).expect("get_node succeeds");
+    assert_eq!(back, v);
 }
 
 // ---------------------------------------------------------------- NotFound
@@ -296,6 +357,57 @@ fn put_is_idempotent_and_grow_only() {
 }
 
 #[test]
+fn insert_of_divergent_bytes_under_a_live_id_fails_closed() {
+    // PO-STORE-3 fail-closed (review finding #5): an occupied id asked to hold
+    // DIFFERENT bytes is a Collision that leaves state untouched — so the grow-only
+    // law does not lean on hash injectivity. (Reached by handing `insert` a
+    // mismatched (id, bytes); in the wild it takes a real BLAKE3 collision.)
+    let mut store = MemoryStore::new();
+    let a = canonical_map(1);
+    let id = store.put(&a).expect("put A");
+    let b = canonical_map(2);
+    assert_ne!(a, b);
+
+    let err = store
+        .insert(id, &b)
+        .expect_err("divergent bytes under a live id must fail closed");
+    match err {
+        StoreError::Collision { id: contested } => assert_eq!(contested, id),
+        other => panic!("expected Collision, got {other:?}"),
+    }
+    // State untouched: A still resolves; the count did not grow.
+    assert_eq!(store.get(&id).expect("A still present"), a);
+    assert_eq!(store.len(), 1);
+    // Equal reinsertion remains an idempotent success.
+    store.insert(id, &a).expect("equal reinsert is idempotent");
+    assert_eq!(store.len(), 1);
+}
+
+#[test]
+fn store_error_has_backend_and_collision_representations() {
+    // Review finding #1: a downstream disk/network backend can construct a truthful
+    // I/O error TODAY (not just wait for this crate to add a variant), tagged with
+    // the failing operation and preserving its source chain.
+    let io = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "disk offline");
+    let backend = StoreError::Backend {
+        operation: StoreOperation::Insert,
+        source: Box::new(io),
+    };
+    assert!(
+        backend.to_string().contains("insert"),
+        "a backend error names the operation that failed"
+    );
+    assert!(
+        std::error::Error::source(&backend).is_some(),
+        "a backend error preserves its underlying source"
+    );
+
+    let id = ContentId::from_canonical_bytes(&canonical_map(1));
+    let collision = StoreError::Collision { id };
+    assert!(collision.to_string().contains(&id.to_string()));
+}
+
+#[test]
 fn store_state_is_insertion_order_independent() {
     // PO-STORE-3 corollary: the store's state is a pure function of the
     // node SET, not of the order nodes arrived.
@@ -359,7 +471,9 @@ fn node_store_is_dyn_compatible_and_gets_ext_methods() {
         bytes,
         "NodeStoreExt::get must work on dyn NodeStore"
     );
-    let back: ipld_core::ipld::Ipld = boxed.get_typed(&id).expect("get_typed over dyn NodeStore");
+    let back: ipld_core::ipld::Ipld = boxed
+        .decode_verified_bytes(&id)
+        .expect("decode_verified_bytes over dyn NodeStore");
     let reencoded = canonical::to_canonical_dagcbor(&back).expect("re-encode");
     assert_eq!(reencoded, bytes, "typed read round-trips through dyn");
     boxed
@@ -399,25 +513,34 @@ mod merkle_integration {
     use super::*;
     use content_addressable::merkle::MerkleNode;
 
-    /// Recursively fetch a `MerkleNode<String>` DAG from `root`, verifying
-    /// every node on the way down (get_typed reads through the verified path;
-    /// `verify` re-checks the node's own claim).
+    /// Recursively fetch a `MerkleNode<String>` DAG from `root` through the
+    /// **identity-preserving** [`NodeStoreExt::get_node`] read — which re-encodes
+    /// and compares, so it *already* guarantees each node is the one its id names
+    /// (the separate `node.verify(root)` the earlier draft needed is now redundant).
+    ///
+    /// `visiting` fails closed on a back-edge rather than recursing to stack
+    /// exhaustion: a content-addressed DAG cannot hold a cycle (a node's id embeds
+    /// its parents', so a cycle is a cryptographic fixpoint), but traversal must not
+    /// *rely* on that for termination. (Full depth/node/byte budgets belong in the
+    /// structures that own traversal, not this get/put seam — see the review notes.)
     fn reconstruct(
         store: &impl NodeStore,
         root: &ContentId,
         out: &mut BTreeMap<ContentId, MerkleNode<String>>,
+        visiting: &mut std::collections::BTreeSet<ContentId>,
     ) -> Result<(), StoreError> {
         if out.contains_key(root) {
             return Ok(());
         }
-        let node: MerkleNode<String> = store.get_typed(root)?;
         assert!(
-            node.verify(root).expect("verify runs"),
-            "every reconstructed node must verify against the id that named it"
+            visiting.insert(*root),
+            "back-edge: a content-addressed DAG is acyclic"
         );
+        let node: MerkleNode<String> = store.get_node(root)?;
         for parent in node.parents().clone() {
-            reconstruct(store, &parent, out)?;
+            reconstruct(store, &parent, out, visiting)?;
         }
+        visiting.remove(root);
         out.insert(*root, node);
         Ok(())
     }
@@ -438,7 +561,8 @@ mod merkle_integration {
 
         // From the root id + the store ALONE, the whole DAG comes back.
         let mut recovered = BTreeMap::new();
-        reconstruct(&store, &d_id, &mut recovered).expect("reconstruct from root");
+        let mut visiting = std::collections::BTreeSet::new();
+        reconstruct(&store, &d_id, &mut recovered, &mut visiting).expect("reconstruct from root");
 
         assert_eq!(recovered.len(), 4, "all four nodes reachable from the root");
         assert_eq!(recovered[&a_id], a);
@@ -463,7 +587,8 @@ mod merkle_integration {
         partial.put(&b_bytes).expect("put only b");
 
         let mut recovered = BTreeMap::new();
-        let err = reconstruct(&partial, &b_id, &mut recovered)
+        let mut visiting = std::collections::BTreeSet::new();
+        let err = reconstruct(&partial, &b_id, &mut recovered, &mut visiting)
             .expect_err("missing parent must fail reconstruction");
         assert!(
             matches!(err, StoreError::NotFound(missing) if missing == a_id),

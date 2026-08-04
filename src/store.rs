@@ -33,29 +33,41 @@
 //! pinned by the frozen v1 CID profile, which already self-describes codec +
 //! hash, so the laws never name a hash function:
 //!
-//! - **PO-STORE-1 (put derives the address) \[Lean\]** — [`NodeStoreExt::put`]`(b)`
+//! - **PO-STORE-1A (put derives the address) \[Lean\]** — [`NodeStoreExt::put`]`(b)`
 //!   returns exactly [`ContentId::from_canonical_bytes`]`(b)` for canonical `b`;
 //!   consequently [`put_node`](NodeStoreExt::put_node)`(n)` equals
 //!   `n.content_id()`. Like verify-on-read, this is **sealed**: the id is
 //!   derived in the blanket-implemented extension, and the backend's only write
 //!   op ([`insert`](NodeStore::insert)) is handed that id — it never computes
 //!   one, so no backend can mint or rebind identity. Addressing is a pure
-//!   function of content.
+//!   function of content — this is what the blanket impl structurally guarantees.
+//! - **PO-STORE-1B (backend acknowledgement) \[TLA+, a backend law\]** — that
+//!   [`insert`](NodeStore::insert) returned `Ok` means only that the backend
+//!   *accepted* the mapping under its documented durability/visibility contract.
+//!   The blanket impl CANNOT prove the bytes were stored, stored under that id,
+//!   readable later, or that no other mapping was disturbed: a backend that drops
+//!   every write and returns `Ok(())` satisfies 1A (the returned id is still
+//!   correct) while storing nothing. 1B is therefore a *backend* obligation, not a
+//!   seam guarantee — [`MemoryStore`] discharges it (in-memory, immediate); a
+//!   disk/network backend discharges it per its own model, surfacing failures
+//!   through [`StoreError::Backend`].
 //! - **PO-STORE-2 (verify-on-read soundness) \[Lean\]** — for **any** backend
 //!   `get_unverified`, including an adversarial one,
 //!   [`NodeStoreExt::get`]`(id)` returns `Ok(b)` only if
-//!   `from_canonical_bytes(b) == id`. Corruption or substitution surfaces as
-//!   [`ContentError::VerificationFailed`], never as wrong bytes. This holds
-//!   for arbitrary backends because `get` is blanket-implemented and sealed by
-//!   coherence; it is the seam-level analogue of the frozen
-//!   [`ensure_content_id`](crate::ContentAddressable::ensure_content_id)
-//!   contract.
-//! - **PO-STORE-3 (grow-only monotonicity) \[TLA+\]** — the store's
-//!   `id → bytes` map only grows and a mapping is never rebound: `put` of the
-//!   same bytes is idempotent, and (given the collision-resistance property the
-//!   profile names) two distinct byte strings never contend for one id. This is
-//!   the invariant a future GC/eviction design must consciously renegotiate,
-//!   which is why deletion is a non-goal here.
+//!   `from_canonical_bytes(b) == id` (byte-addressed: `b` hashes to `id`; it does
+//!   *not* assert `b` is canonical — see [`get`](NodeStoreExt::get) and the
+//!   identity-preserving [`get_node`](NodeStoreExt::get_node)). Corruption or
+//!   substitution surfaces as [`ContentError::VerificationFailed`], never as wrong
+//!   bytes. This holds for arbitrary backends because `get` is blanket-implemented
+//!   and sealed by coherence.
+//! - **PO-STORE-3 (grow-only monotonicity, fail-closed) \[TLA+\]** — the store's
+//!   `id → bytes` map only grows and a mapping is never rebound: re-inserting the
+//!   *same* bytes is idempotent, and inserting *different* bytes under a live id
+//!   **fails closed** with [`StoreError::Collision`], leaving state unchanged. The
+//!   law therefore does NOT lean on hash injectivity — a collision (or a caller
+//!   passing a mismatched `(id, bytes)`) cannot silently rebind. This is the
+//!   invariant a future GC/eviction design must consciously renegotiate, which is
+//!   why deletion is a non-goal here.
 //!
 //! Mechanized Lean/TLA+ artifacts land with the formal toolkit issues; the
 //! laws' executable counterparts live in `tests/store.rs`.
@@ -95,8 +107,8 @@
 //! let id = store.put_node(&record).unwrap();
 //! assert_eq!(id, record.content_id().unwrap());
 //!
-//! // ...and the verified read hands back exactly what the id names.
-//! let back: Record = store.get_typed(&id).unwrap();
+//! // ...and the identity-preserving read hands back exactly what the id names.
+//! let back: Record = store.get_node(&id).unwrap();
 //! assert_eq!(back, record);
 //! ```
 //!
@@ -107,6 +119,7 @@
 //!
 //! [`MerkleNode`]: crate::merkle::MerkleNode
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use serde::de::DeserializeOwned;
@@ -147,6 +160,57 @@ pub enum StoreError {
     /// ingest; [`put_node`](NodeStoreExt::put_node) propagates encoding failures.
     #[error(transparent)]
     Content(#[from] ContentError),
+
+    /// A backend I/O failure during a raw [`NodeStore`] operation.
+    ///
+    /// This is the variant a real disk / network / database backend needs but a
+    /// downstream crate CANNOT add itself (`#[non_exhaustive]` reserves that for
+    /// *this* crate). [`MemoryStore`] never produces it; a RocksDB / filesystem /
+    /// S3 / HTTP backend surfaces its own error through `source`, tagged with the
+    /// [`StoreOperation`] that failed. Without this the "replaceable storage seam"
+    /// would be memory-only: a fallible backend would have nowhere truthful to put
+    /// an I/O error.
+    #[error("store backend error during {operation}")]
+    Backend {
+        /// The raw operation that failed.
+        operation: StoreOperation,
+        /// The backend's own error, preserved for the chain.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    /// An occupied id was asked to hold *different* bytes — a store-invariant
+    /// violation (a hash collision, or a caller inserting mismatched `(id, bytes)`).
+    ///
+    /// The store **fails closed**: it never overwrites, so this makes the grow-only
+    /// law (PO-STORE-3) hold *without* leaning on hash injectivity. Re-inserting
+    /// *equal* bytes is still an idempotent success — only *divergent* bytes under a
+    /// live id are a collision.
+    #[error("content-id collision: {id} already holds different bytes")]
+    Collision {
+        /// The contested id.
+        id: ContentId,
+    },
+}
+
+/// The raw [`NodeStore`] operation a [`StoreError::Backend`] failure occurred in —
+/// so a backend error names what it was doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StoreOperation {
+    /// A raw fetch ([`NodeStore::get_unverified`]).
+    Get,
+    /// A raw store ([`NodeStore::insert`]).
+    Insert,
+}
+
+impl std::fmt::Display for StoreOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Get => "get",
+            Self::Insert => "insert",
+        })
+    }
 }
 
 /// The narrow seam every structure traverses: raw fetch and store of canonical
@@ -206,14 +270,24 @@ pub trait NodeStore {
 /// PO-STORE-2 hold for arbitrary, even adversarial, backends. (A *provided*
 /// trait method would not do: implementors can override those.)
 ///
-/// The typed doors [`get_typed`](Self::get_typed) / [`put_node`](Self::put_node)
+/// The typed doors [`get_node`](Self::get_node) /
+/// [`decode_verified_bytes`](Self::decode_verified_bytes) / [`put_node`](Self::put_node)
 /// are generic methods here rather than free functions: [`NodeStore`] itself
 /// stays object-safe (its two methods are non-generic), and `dyn NodeStore`
 /// still receives every method on this trait through the blanket impl — a
 /// generic method on an extension trait costs no object-safety on the base.
 pub trait NodeStoreExt: NodeStore {
-    /// **Verified** fetch: re-derives the id from the fetched bytes and
-    /// requires it to equal `id`.
+    /// **Hash-verified** raw fetch: guarantees the returned bytes re-derive `id`
+    /// (PO-STORE-2), and *only* that.
+    ///
+    /// The contract is deliberately **byte-addressed, not canonical**: the id is
+    /// re-derived with the *unchecked* [`ContentId::from_canonical_bytes`], so a
+    /// hostile backend that stores valid-but-non-canonical dag-cbor under the id
+    /// those exact bytes hash to will pass here. That is sound for a byte-addressed
+    /// read — the bytes provably hash to `id` — but callers that need canonical
+    /// bytes or an identity-preserving *typed* value must use
+    /// [`get_node`](Self::get_node), which re-encodes and compares. (Raw canonical
+    /// bytes on ingest are the writer's job via [`put_checked`](Self::put_checked).)
     ///
     /// This is the seam-level analogue of the frozen
     /// [`ensure_content_id`](crate::ContentAddressable::ensure_content_id)
@@ -221,7 +295,8 @@ pub trait NodeStoreExt: NodeStore {
     ///
     /// # Errors
     ///
-    /// - [`StoreError::NotFound`] (or a backend's own variant) from the raw fetch.
+    /// - [`StoreError::NotFound`] (or a backend's own [`StoreError::Backend`]) from
+    ///   the raw fetch.
     /// - [`StoreError::Content`] wrapping
     ///   [`ContentError::VerificationFailed`] (with both ids' canonical `b…`
     ///   strings) if the fetched bytes do not re-derive `id` (PO-STORE-2).
@@ -277,16 +352,62 @@ pub trait NodeStoreExt: NodeStore {
         Ok(id)
     }
 
-    /// Fetch through the **verified** read path and decode as a `T`.
+    /// Decode the hash-verified bytes at `id` as a `T` — **without** guaranteeing
+    /// the decoded value is *named by* `id`.
+    ///
+    /// This is the weaker, lenient door: it proves the raw bytes hash to `id`
+    /// ([`get`](Self::get)) and that they decode as a `T`, but it does **not**
+    /// re-encode `T` and compare. A `T` whose deserialization is lossy (dropped
+    /// unknown fields, aliases, `#[serde(default)]`, flattening, a custom
+    /// `Deserialize`) can decode from bytes whose canonical form — and therefore
+    /// CID — differs from `id`. So `value.content_id() != id` is *possible* here.
+    /// When identity must be preserved, use [`get_node`](Self::get_node).
     ///
     /// # Errors
     ///
     /// Everything [`get`](Self::get) can return, plus [`StoreError::Content`]
     /// wrapping [`ContentError::DecodingError`] if the (verified) bytes do not
     /// decode as a `T`.
-    fn get_typed<T: DeserializeOwned>(&self, id: &ContentId) -> Result<T, StoreError> {
+    fn decode_verified_bytes<T: DeserializeOwned>(&self, id: &ContentId) -> Result<T, StoreError> {
         let bytes = self.get(id)?;
         canonical::from_canonical_dagcbor(&bytes).map_err(StoreError::from)
+    }
+
+    /// **Identity-preserving** typed read: fetch, decode as a `T`, then require the
+    /// decoded value to re-encode to *exactly* the fetched bytes — so the returned
+    /// value is provably the one named by `id`.
+    ///
+    /// This closes the gap in [`decode_verified_bytes`](Self::decode_verified_bytes):
+    /// exact re-encode equality is strictly stronger than comparing hashes (it needs
+    /// no collision-resistance assumption) and rejects any lossy round-trip — a map
+    /// with an extra field that `T` silently discards decodes fine but re-encodes to
+    /// *different* bytes, so it is rejected here rather than returned under the wrong
+    /// identity.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`get`](Self::get) can return; [`StoreError::Content`] wrapping
+    /// [`ContentError::DecodingError`] if the bytes do not decode as a `T`,
+    /// [`ContentError::EncodingError`] if the value fails to re-encode, or
+    /// [`ContentError::VerificationFailed`] if the re-encoded bytes are not the
+    /// bytes named by `id` (a lossy/aliased decode).
+    fn get_node<T>(&self, id: &ContentId) -> Result<T, StoreError>
+    where
+        T: DeserializeOwned + ContentAddressable,
+    {
+        let original = self.get(id)?;
+        let value: T = canonical::from_canonical_dagcbor(&original)?;
+        let reencoded = value.canonical_form()?;
+        if reencoded != original {
+            // The decoded value is NOT the one named by `id`: its canonical form
+            // addresses a different CID. Report that mismatch, not wrong bytes.
+            let computed = ContentId::from_canonical_bytes(&reencoded);
+            return Err(StoreError::Content(ContentError::VerificationFailed {
+                expected: id.to_string(),
+                computed: computed.to_string(),
+            }));
+        }
+        Ok(value)
     }
 
     /// Encode a [`ContentAddressable`] node canonically and store it.
@@ -350,10 +471,18 @@ impl NodeStore for MemoryStore {
     }
 
     fn insert(&mut self, id: ContentId, bytes: &[u8]) -> Result<(), StoreError> {
-        // Grow-only, write-once (PO-STORE-3): first write wins; a repeat write
-        // of an occupied id (reachable only by re-storing equal bytes, absent a
-        // hash collision) is a no-op, never a rebind.
-        self.nodes.entry(id).or_insert_with(|| bytes.to_vec());
-        Ok(())
+        // Grow-only, write-once (PO-STORE-3), FAIL-CLOSED: a vacant id takes the
+        // bytes; an occupied id holding EQUAL bytes is an idempotent no-op; an
+        // occupied id holding DIFFERENT bytes is a `Collision` that leaves state
+        // untouched. Failing closed here means the grow-only law does not lean on
+        // hash injectivity — divergent bytes under a live id can never silently win.
+        match self.nodes.entry(id) {
+            Entry::Vacant(slot) => {
+                slot.insert(bytes.to_vec());
+                Ok(())
+            }
+            Entry::Occupied(slot) if slot.get().as_slice() == bytes => Ok(()),
+            Entry::Occupied(_) => Err(StoreError::Collision { id }),
+        }
     }
 }

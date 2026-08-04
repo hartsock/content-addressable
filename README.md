@@ -321,8 +321,10 @@ assert_eq!(s.get(&id).unwrap(), canonical);   // verified read (sealed path)
 Identity derivation lives entirely in the sealed `NodeStoreExt`: a backend
 implements only the two dumb operations (`get_unverified` and `insert` at a
 seam-supplied id), so it can never mint or rebind an id, nor skip verify-on-read.
-The typed doors `s.put_node(&node)` / `s.get_typed::<T>(&id)` add
-`canonical_form` + put and verified read + decode.
+The typed doors `s.put_node(&node)` / `s.get_node::<T>(&id)` add `canonical_form`
++ put and an **identity-preserving** verified read (decode, then re-encode and
+require the value to be named by the id); `s.decode_verified_bytes::<T>(&id)` is
+the lenient sibling that decodes hash-verified bytes without that identity check.
 
 The seam's laws (put derives the address; verify-on-read soundness for
 arbitrary backends; grow-only monotonicity) are stated in the module docs and

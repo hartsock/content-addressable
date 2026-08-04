@@ -36,5 +36,5 @@ pub use error::ContentError;
 #[cfg(feature = "merkle")]
 pub use merkle::MerkleNode;
 #[cfg(feature = "store")]
-pub use store::{MemoryStore, NodeStore, NodeStoreExt, StoreError};
+pub use store::{MemoryStore, NodeStore, NodeStoreExt, StoreError, StoreOperation};
 pub use trait_def::ContentAddressable;
