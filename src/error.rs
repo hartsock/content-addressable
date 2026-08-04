@@ -17,7 +17,7 @@
 //! | [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor) | [`EncodingError`](ContentError::EncodingError) |
 //! | [`from_canonical_dagcbor`](crate::canonical::from_canonical_dagcbor) | [`DecodingError`](ContentError::DecodingError) |
 //! | [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) | [`DecodingError`](ContentError::DecodingError) (not dag-cbor), [`NonCanonical`](ContentError::NonCanonical) (valid but non-canonical), [`EncodingError`](ContentError::EncodingError) (re-encode failed) |
-//! | [`ContentId::from_bytes`](crate::ContentId::from_bytes) / [`FromStr`](core::str::FromStr) | [`InvalidCid`](ContentError::InvalidCid) |
+//! | [`ContentId::from_bytes`](crate::ContentId::from_bytes) / [`FromStr`](core::str::FromStr) / [`TryFrom<Cid>`](crate::ContentId) / binary `Deserialize` | [`InvalidCid`](ContentError::InvalidCid) (not a CID at all) or [`InvalidCidProfile`](ContentError::InvalidCidProfile) (a valid CID that is not the frozen profile) |
 //! | [`content_id`](crate::ContentAddressable::content_id) | propagates `canonical_form`'s error only (typically [`EncodingError`](ContentError::EncodingError)) |
 //! | [`verify`](crate::ContentAddressable::verify) | propagates [`content_id`](crate::ContentAddressable::content_id) only; a *mismatch* is `Ok(false)`, never an `Err` |
 //! | [`ensure_content_id`](crate::ContentAddressable::ensure_content_id) | propagates [`content_id`](crate::ContentAddressable::content_id), plus [`VerificationFailed`](ContentError::VerificationFailed) on mismatch |
@@ -150,6 +150,22 @@ pub enum ContentError {
         /// The underlying CID parse error, preserved for `.source()` chaining.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    /// A syntactically-valid CID was parsed, but it is **not** this crate's frozen
+    /// profile: CIDv1 + dag-cbor (`0x71`) + BLAKE3 (`0x1e`) + a 32-byte digest.
+    ///
+    /// Every ingress path — [`from_bytes`](crate::ContentId::from_bytes), the
+    /// [`FromStr`](core::str::FromStr) impl, [`TryFrom<Cid>`](crate::ContentId), and
+    /// the binary/IPLD `Deserialize` — rejects a foreign CID with this, so *every*
+    /// `ContentId` (however it entered) carries the fixed profile the presentation
+    /// accessors ([`digest_bytes`](crate::ContentId::digest_bytes) etc.) rely on.
+    /// A policy rejection, so — like [`NonCanonical`](ContentError::NonCanonical) —
+    /// it carries no underlying `source`; `reason` names the parameter that was off.
+    #[error("CID is not the content-addressable profile: {reason}")]
+    InvalidCidProfile {
+        /// Which profile parameter was wrong (version / codec / hash / digest length).
+        reason: String,
     },
 }
 

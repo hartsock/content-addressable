@@ -239,9 +239,11 @@ fn ipld_to_py<'py>(py: Python<'py>, value: &Ipld) -> PyResult<Bound<'py, PyAny>>
             Ok(dict.into_any())
         }
         Ipld::Link(cid) => {
-            let id = PyContentId {
-                inner: CoreContentId::from(*cid),
-            };
+            // A decoded tag-42 link is an arbitrary CID — admit it only if it is
+            // this crate's profile, else raise ValueError (never panic downstream).
+            let inner =
+                CoreContentId::try_from(*cid).map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let id = PyContentId { inner };
             id.into_bound_py_any(py)
         }
     }
