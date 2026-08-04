@@ -2,99 +2,88 @@
 
 > **Data carries its own proof of integrity, intrinsically.**
 
-A foundational Rust crate for content addressing. A content address is not a
-name assigned to data by an authority — it is *derived from the data itself*.
-Give someone the bytes and the address, and they can recompute the address and
-know, with no trusted third party, that the bytes are exactly what the address
-names. The proof travels with the data.
+IPLD-native content addressing for Rust and Python. A content address is
+*derived from the data itself*, not assigned by an authority — give someone the
+bytes and the address, and they can recompute the address and know, with no
+trusted third party, that the bytes are exactly what the address names. The
+proof travels with the data.
 
 This crate is deliberately small and honest: it is the instrument, not the sky.
 
-## IPLD-native
+It speaks the multiformats / IPLD stack, so its artifacts interoperate with the
+wider content-addressed world (IPFS, IPLD, libp2p). Every id is a **CIDv1** with
+a fixed profile:
 
-This crate does **not** roll its own identifier format or canonicalization. It
-speaks the multiformats / IPLD stack, so its artifacts interoperate with the
-wider content-addressed world (IPFS, IPLD, libp2p, and friends):
+| Field | Value |
+|-------|-------|
+| CID version | v1 |
+| Codec | DAG-CBOR (`0x71`) |
+| Multihash | BLAKE3 (`0x1e`) |
+| Digest | 32 bytes |
+| Encoding | canonical DAG-CBOR (strict key order, definite lengths, tag-42 links) |
 
-- **`ContentId`** is a newtype over a real IPLD [`Cid`] (CID **v1**), from the
-  [`cid`] crate re-exported by [`ipld-core`].
-- Identities are **BLAKE3** multihashes (multihash code `0x1e`), via the
-  [`multihash`] crate.
-- The codec is **canonical dag-cbor** (`0x71`), via [`serde_ipld_dagcbor`].
-  dag-cbor *is* the canonical form: strict map key ordering, definite-length
-  arrays/maps, and tag-42 links are enforced by the codec — so determinism is a
-  property of the encoder, not of caller discipline.
+Rust is the core implementation; the Python package is a PyO3 binding over that
+**same Rust core**, so an id computed in Python is byte-identical to the one Rust
+computes for the same canonical IPLD value.
 
-The CID is built explicitly: `BLAKE3(bytes)` → `Multihash::wrap(0x1e, digest)`
-→ `Cid::new_v1(0x71, mh)`.
+## Status & stability
 
-`ContentId` exposes two mint sites for this shape:
+The package is **`0.1.0-alpha.1`**. "The package is alpha" and "specific core
+contracts are frozen" are both true and not in tension: the core byte/wire and
+API contracts are locked for the whole `0.1.x` line, while the optional features
+are still moving.
 
-- **`from_canonical_bytes(&[u8])`** — the normal door: hashes the canonical
-  dag-cbor bytes for you.
-- **`from_blake3_content_digest([u8; 32])`** — a guarded, **no-rehash** escape
-  hatch for BLAKE3-native upstreams that already hashed their content and hold
-  only the 32-byte digest (a signature, an address), not the original bytes. It
-  wraps the digest directly, with **no second hash** (the wrapping rule is the
-  *same frozen tail* both doors share, so they emit byte-identical CIDs for the
-  same digest). It is **unchecked**: the caller asserts the digest is BLAKE3
-  over canonical dag-cbor; a digest computed any other way names content nothing
-  hashed. If you have the bytes, use `from_canonical_bytes`. (The Python face
-  mirrors this as `ContentId.from_blake3_content_digest(bytes)`, validating the
-  32-byte length and raising `ValueError` otherwise.)
+| Surface | Default | Stability |
+|---------|:-------:|-----------|
+| `ContentId`, canonical encoding, core errors, presentation, MSRV | Yes | **Frozen for `0.1.x`** — changing any is a breaking release outside `0.1.x` |
+| Python core parity | Separate package | Same core byte profile |
+| `merkle` feature | No | **Experimental** — serialized node bytes NOT frozen |
+| `store` feature | No | **Experimental** — trait/API surface NOT frozen (no new wire format of its own) |
 
-### Presentation contract (FROZEN)
+Details and rationale: [`docs/STABILITY.md`](docs/STABILITY.md).
 
-Whatever forms a `ContentId` prints and emits become a byte/wire contract at
-`0.1.0`. The crate names **four** distinct presentation forms so callers can't
-confuse them, and freezes each (changing any is a major version bump):
+## Installation
 
-| Form | Method (Rust / Python) | What it is |
-|------|------------------------|------------|
-| **Canonical text** | `Display` / `to_string()` · `str(id)` | multibase **base32-lower** (`b…`) — the IPLD-canonical CID string |
-| **Binary envelope** | `to_bytes()` / `from_bytes()` · `to_bytes()` / `from_bytes()` | the full **CID binary** form (version + codec + multihash + digest) |
-| **Bare digest** | `digest_bytes() -> [u8; 32]` · `digest_bytes() -> bytes` | the raw **32-byte BLAKE3** hash — no envelope |
-| **Bare-digest-hex** | `digest_hex() -> String` · `digest_hex() -> str` | lower-hex of the 32-byte digest (**64 chars, no prefix**) |
+Rust:
 
-There are **three mutually-incompatible "hex" conventions** for a CID in the
-wild; the crate names them to end the ambiguity:
+```toml
+[dependencies]
+content-addressable = "0.1.0-alpha.1"
+```
 
-1. **bare-digest-hex** — hex of the raw 32-byte digest. This is what
-   `digest_hex()` returns (the "swarm" / kyln `to_hex()` form: shortest, hash
-   only).
-2. **full-CID-bytes-hex** — hex of `to_bytes()` (the whole envelope as base16).
-   **Deliberately not a method.** It is just `hex::encode(id.to_bytes())`;
-   blessing it as `cid_hex()` would add a third "hex" that invites exactly the
-   confusion this contract exists to end. A caller who truly needs it
-   hex-encodes `to_bytes()` and owns that choice. (Recorded so it is not
-   re-litigated; it can be added later additively.)
-3. **multibase base32-lower** — the `Display` string; the canonical text form.
+With the optional (default-off) features:
 
-`Display` is the inverse of `FromStr` for base32-lower, and that round-trip is
-frozen and tested. The `digest_hex()` of every conformance vector is pinned in
-`tests/vectors.json` and asserted in **both** the Rust and Python gates, so the
-new accessor's bytes cannot drift across languages.
+```toml
+content-addressable = { version = "0.1.0-alpha.1", features = ["merkle"] }
+content-addressable = { version = "0.1.0-alpha.1", features = ["store"] }
+content-addressable = { version = "0.1.0-alpha.1", features = ["merkle", "store"] }
+```
 
-[`Cid`]: https://docs.rs/cid
-[`cid`]: https://crates.io/crates/cid
-[`ipld-core`]: https://crates.io/crates/ipld-core
-[`multihash`]: https://crates.io/crates/multihash
-[`serde_ipld_dagcbor`]: https://crates.io/crates/serde_ipld_dagcbor
+Python:
 
-## Usage
+```bash
+pip install content-addressable
+```
 
-Implement `ContentAddressable` by providing `canonical_form`; you get
-`content_id` and `verify` for free:
+The PyPI *distribution* is `content-addressable` (hyphen); the *import* name is
+`content_addressable` (underscore):
+
+```python
+import content_addressable
+```
+
+## Rust quick start
+
+Implement `ContentAddressable` by providing `canonical_form`; `content_id`,
+`verify`, and `ensure_content_id` come for free:
 
 ```rust
 use content_addressable::{canonical, ContentAddressable, ContentError};
 use serde::Serialize;
-use std::collections::BTreeMap;
 
 #[derive(Serialize)]
 struct Record {
     name: String,
-    attrs: BTreeMap<String, u64>,
 }
 
 impl ContentAddressable for Record {
@@ -103,32 +92,26 @@ impl ContentAddressable for Record {
     }
 }
 
-let r = Record { name: "alpha".into(), attrs: BTreeMap::new() };
-let id = r.content_id().unwrap();          // a CIDv1 (dag-cbor + BLAKE3)
-assert!(r.verify(&id).unwrap());           // self-certifying
-println!("{id}");                          // base32-lower multibase string (Display)
-let _digest: [u8; 32] = id.digest_bytes(); // the raw BLAKE3 hash (no envelope)
-let _hex: String = id.digest_hex();        // 64-char bare-digest-hex (no prefix)
+let record = Record { name: "alpha".into() };
+
+let id = record.content_id()?;          // a CIDv1 (DAG-CBOR + BLAKE3)
+assert!(record.verify(&id)?);           // self-certifying: re-derive and compare
+println!("{id}");                       // "bafyr4i…" — the canonical text form
+# Ok::<(), ContentError>(())
 ```
 
-## Python
+`verify` returns `Ok(false)` on a mismatch; its strict sibling
+`ensure_content_id` returns `Err(ContentError::VerificationFailed)` instead. The
+secondary digest and binary presentation forms are in
+[Presentation forms](#presentation-forms).
 
-The same primitives ship as a PyO3 binding on PyPI, backed by the **exact same
-Rust core** — so a `ContentId` computed in Python is **byte-identical** to the
-one Rust computes for the same value. Install it with:
+## Python quick start
 
-```sh
-pip install content-addressable          # PyPI: 0.1.0a1 (alpha — bytes NOT frozen)
-```
-
-> **Import name vs. distribution name.** The PyPI *distribution* is
-> `content-addressable` (hyphen); the *import* name is `content_addressable`
-> (underscore). You `pip install content-addressable` but
-> `import content_addressable`.
-
-The Python face has **no `ContentAddressable` trait and no `verify`** (the Rust
-example above doesn't translate). Instead you canonicalize a native Python value
-and take its `content_id` directly:
+The Python face exposes the same byte profile, but **not** the Rust
+`ContentAddressable` trait or `verify` — you canonicalize a native Python value
+and take its `content_id` directly. This block is mirrored by
+`tests/test_readme.py` (every call identical), so CI's `python` job proves it
+still works:
 
 ```python
 from content_addressable import (
@@ -136,269 +119,173 @@ from content_addressable import (
     to_canonical_dagcbor, from_canonical_dagcbor,
 )
 
-# A value's content id (CIDv1, dag-cbor + BLAKE3). Key order is irrelevant:
+# A value's content id (CIDv1, DAG-CBOR + BLAKE3). Key order is irrelevant.
 record = {"name": "alpha", "attrs": {}}
 cid = content_id(record)
-print(cid)                                   # base32-lower multibase string, 'b…'
-print(cid.digest_hex())                      # 64-char bare-digest-hex, no prefix
-print(to_canonical_dagcbor(record).hex())    # the canonical dag-cbor bytes, as hex
+
+assert str(cid).startswith("b")                # base32-lower multibase text
+assert len(cid.digest_hex()) == 64             # 64-char bare-digest-hex
+assert isinstance(to_canonical_dagcbor(record), bytes)
 
 # Canonical bytes round-trip; equal values -> equal bytes -> equal ids.
 raw = to_canonical_dagcbor(record)
 assert content_id(record) == ContentId.from_canonical_bytes(raw)
-assert from_canonical_dagcbor(raw) == record                   # decode round-trip
-assert content_id({"attrs": {}, "name": "alpha"}) == cid       # order-independent
+assert from_canonical_dagcbor(raw) == record
+assert content_id({"attrs": {}, "name": "alpha"}) == cid  # order-independent
 
-# Parse an id back from its string / binary forms.
+# Parse an id back from its text / binary forms.
 assert ContentId.parse(str(cid)) == cid
 assert ContentId.from_bytes(cid.to_bytes()) == cid
 
-# Wrap an already-computed 32-byte BLAKE3 digest as an id, with NO re-hash
-# (the Python mirror of the Rust no-rehash door). The 32-byte length is
-# validated; a wrong length raises ValueError.
+# Wrap an already-computed 32-byte BLAKE3 digest with NO re-hash.
 assert ContentId.from_blake3_content_digest(cid.digest_bytes()) == cid
+assert len(cid.digest_bytes()) == 32           # the raw BLAKE3 hash
 ```
 
-`ContentId` also exposes `digest_bytes()` (the raw 32-byte BLAKE3 hash) and
-`__eq__` / `__hash__`, so an id is usable as a `dict` key or `set` member.
+`ContentId` implements `__eq__` / `__hash__`, so an id is usable as a `dict` key
+or `set` member.
 
-The alpha **"bytes are NOT frozen"** caveat below applies *identically* to
-Python output — read the [Alpha status](#alpha-status--bytes-are-not-frozen)
-section before treating any `0.1.0a1` bytes as durable.
+## Choosing a construction path
 
-## Alpha status — bytes are NOT frozen
+Prefer the safe path. `from_canonical_bytes` is fast but carries a real
+precondition — it is **not** universally safe.
 
-This is **`0.1.0-alpha.1`**, working toward `0.1.0`. All 10 **"must-fix gate"**
-items are now **frozen** — a stability contract across the `0.1.x` line, where
-changing any of them is a major version bump:
+| Use case | API (Rust / Python) | Contract |
+|----------|---------------------|----------|
+| Hash a normal value | `value.content_id()` / `content_id(value)` | **Preferred safe path** |
+| Encode a value to bytes | `canonical::to_canonical_dagcbor(v)` / `to_canonical_dagcbor(v)` | Produces canonical DAG-CBOR |
+| Accept foreign / untrusted bytes | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: *no single checked constructor yet* | Validates DAG-CBOR canonicality; errors on non-canonical |
+| Hash already-trusted canonical bytes | `ContentId::from_canonical_bytes(b)` | **Unchecked** precondition: caller asserts `b` is canonical DAG-CBOR |
+| Wrap an existing BLAKE3 digest | `ContentId::from_blake3_content_digest(d)` | No rehash; caller asserts the digest is BLAKE3 over canonical DAG-CBOR |
 
-1. **SETTLED ([#3]).** The serde representation of `ContentId` is frozen: a
-   dag-cbor **tag-42 link** (binary form) via the inner `Cid`'s serde, pinned
-   by a full-byte golden test.
-2. **SETTLED ([#6]).** The **presentation surface** is frozen. `Display` /
-   `to_string()` is multibase **base32-lower** (the `b…` CIDv1 string), the
-   canonical text form; `to_bytes()` / `from_bytes()` is the CID **binary
-   envelope**. `FromStr` is the inverse of `Display` for base32-lower (that
-   round-trip is frozen); its tolerance of other multibases is a documented
-   *convenience, not a contract*. Two named raw-digest accessors are added and
-   frozen: **`digest_bytes()`** (the bare 32-byte BLAKE3 hash) and
-   **`digest_hex()`** (its 64-char lower-hex, the "bare-digest-hex"
-   convention). The redundant `cid_hex()` is **deliberately not added** —
-   `hex::encode(id.to_bytes())` covers it without a third ambiguous "hex". See
-   the **presentation contract** below.
-3. **SETTLED ([#4]).** The hash function (BLAKE3) and codec (dag-cbor) are
-   **fixed forever** for the `0.1.x` line, not selectable.
-4. **SETTLED ([#4]).** Multihash digest length is **32 bytes, fixed**.
-5. **SETTLED ([#4]).** CID version policy: **v1 only**.
-6. **SETTLED ([#5]).** Behavior on non-canonical input to `from_canonical_bytes`
-   is frozen: it stays the **fast, unchecked** minting primitive carrying a
-   **normative** "MUST pass canonical dag-cbor" precondition (passing
-   non-canonical bytes mints a misleading id — a logic error, unenforced by
-   design), with `content_id` / `to_canonical_dagcbor` as the documented safe
-   default. An opt-in **`from_canonical_bytes_checked()`** re-encode-validates
-   foreign/untrusted bytes and returns the new typed
-   **`ContentError::NonCanonical`** (or `DecodingError` for non-dag-cbor). The
-   name is **not** changed to `_unchecked`; `from_canonical_bytes` /
-   `from_canonical_bytes_checked` is the frozen pairing.
-7. **SETTLED ([#7]).** `ContentError` is **frozen** as `#[non_exhaustive]` (so
-   variants can be *added* later without a major bump). The codec source types
-   are hidden behind `Box<dyn Error + Send + Sync + 'static>` (no
-   `serde_ipld_dagcbor` generics in the public signature); `InvalidCid` now
-   preserves the underlying `cid::Error` as a `#[source]`; **no `#[from]`**
-   impls (a deliberate freeze decision); `ContentError: Send + Sync + 'static`
-   is locked by a compile-time test. The error module documents the
-   operation→variant map.
-8. **SETTLED ([#8]).** `verify` returns **`Ok(false)`** on a mismatch (never an
-   `Err`) — frozen. A strict sibling **`ensure_content_id()`** returns
-   **`Err(ContentError::VerificationFailed)`** on mismatch (and `Ok(())` on
-   match), making `VerificationFailed` a real, tested error path. Both return
-   contracts are part of the frozen `0.1.0` API surface.
-9. **SETTLED ([#9]).** The **public crate-root re-export surface** is frozen and
-   minimal: `ContentId`, `ContentAddressable`, `ContentError`, and the
-   `canonical` module (its functions reached as `canonical::to_canonical_dagcbor`
-   etc., **not** re-exported at the root). The codec/hash codes
-   `DAG_CBOR_CODEC` / `BLAKE3_HASH_CODE` were **demoted off the crate root**
-   (still `pub` in `content_id`) so promoting their numeric codes to the root
-   doesn't signal a permanence gate item #3 hasn't committed to;
-   `BLAKE3_DIGEST_LEN` stays private. `MerkleNode` is re-exported only under the
-   experimental `merkle` feature. Removing or narrowing any frozen export after
-   `0.1.0` is a major bump; *adding* one is allowed additively. See the
-   crate-root docs (`src/lib.rs`).
-10. **SETTLED ([#9]).** **MSRV `1.85`** (the Rust 2024 edition baseline, required
-    transitively because `blake3 >= 1.6` pulls `cpufeatures 0.3`, an edition2024
-    crate) and **edition `2021`** are frozen for the `0.1.x` line, marked as policy in
-    `Cargo.toml`. A dedicated CI job pins `dtolnay/rust-toolchain@1.85`
-    (build + test) so a transitive dependency can't raise the real floor while
-    CI stays green; `Cargo.lock` is committed for reproducible resolution across
-    that job and the byte-contract tests. Bumping the MSRV or edition is an
-    intentional, SemVer-relevant change, never a silent `cargo update` effect.
+## Presentation forms
 
-**SETTLED for the freeze ([#10]).** The **no-rehash digest bridge** —
-`ContentId::from_blake3_content_digest([u8; 32])` — is part of the byte
-contract: it emits the *same* frozen CID shape (`0x71` / `0x1e` / 32-byte
-digest) as `from_canonical_bytes`, sharing one private wrapping site so the two
-doors are byte-identical for the same digest. It is an additive constructor (no
-existing bytes change); the wrapping rule downstream BLAKE3-native systems
-(e.g. kyln #303, kyln-lore) persist and link against is now fixed for `0.1.x`.
+A `ContentId` names four distinct presentation forms so callers can't confuse
+them; each is frozen (changing any is a breaking release outside `0.1.x`):
 
-[#3]: https://github.com/hartsock/content-addressable/issues/3
-[#4]: https://github.com/hartsock/content-addressable/issues/4
-[#5]: https://github.com/hartsock/content-addressable/issues/5
-[#6]: https://github.com/hartsock/content-addressable/issues/6
-[#7]: https://github.com/hartsock/content-addressable/issues/7
-[#8]: https://github.com/hartsock/content-addressable/issues/8
-[#9]: https://github.com/hartsock/content-addressable/issues/9
-[#10]: https://github.com/hartsock/content-addressable/issues/10
+| Form | Rust | Python | What it is |
+|------|------|--------|------------|
+| **Canonical text** | `Display` / `to_string()` | `str(id)` | multibase **base32-lower** (`b…`) — the IPLD-canonical CID string |
+| **Binary envelope** | `to_bytes()` / `from_bytes()` | `to_bytes()` / `from_bytes()` | the full **CID binary** form (version + codec + multihash + digest) |
+| **Bare digest** | `digest_bytes() -> [u8; 32]` | `digest_bytes() -> bytes` | the raw **32-byte BLAKE3** hash, no envelope |
+| **Bare-digest-hex** | `digest_hex() -> String` | `digest_hex() -> str` | lower-hex of the 32-byte digest (64 chars, no prefix) |
 
-With all 10 gate items settled the byte/wire and API/MSRV contracts are frozen
-for the `0.1.x` line; the remaining work toward `0.1.0` is the Merkle
-conformance vectors (the `merkle` feature's bytes are still NON-frozen — see
-below) and the final release cut. Treat the *frozen* surfaces as durable; do
-**not** yet depend on the experimental `merkle` node bytes.
+`Display` is the inverse of `FromStr` for base32-lower, and that round-trip is
+frozen and tested. Full CID bytes can be hex-encoded by a caller directly
+(`hex::encode(id.to_bytes())`) — the crate deliberately does not bless a second
+"hex" method; see [`docs/STABILITY.md`](docs/STABILITY.md) for why.
 
-### The `merkle` feature — experimental, bytes NOT frozen
+## Experimental features
 
-A default-**off** cargo feature, `merkle`, gates `src/merkle.rs`, which ships a
-generic content-addressed Merkle-DAG node helper:
+Both features are **default-off** and exercised in CI via `--all-features`. Do
+not depend on the `merkle` node bytes yet.
+
+### `merkle` — content-addressed DAG nodes
+
+`MerkleNode<T>` is a `payload: T` plus `parents: BTreeSet<ContentId>`; its id is
+derived from **both** the payload and the parent links, so a root id plus the
+node bytes determines the whole DAG. Because parents are a `BTreeSet`, they are
+deduplicated and ordered by content-derived `Ord` — equal parent sets always
+produce equal bytes regardless of insertion order, and each parent serializes as
+a real DAG-CBOR tag-42 link.
 
 ```rust
-use content_addressable::merkle::MerkleNode;   // needs feature = "merkle"
-use content_addressable::ContentAddressable;
+use content_addressable::merkle::MerkleNode; // feature = "merkle"
 
-let root = MerkleNode::genesis("hello");        // a node with no parents
-let root_id = root.id().unwrap();
-let child = MerkleNode::new("world", [root_id]); // links root as a parent
-assert!(child.parents().contains(&root_id));     // root is recoverable as a link
+let root = MerkleNode::genesis("hello");
+let root_id = root.id()?;
+let child = MerkleNode::new("world", [root_id]);
+assert!(child.parents().contains(&root_id));
+# Ok::<(), content_addressable::ContentError>(())
 ```
 
-`MerkleNode<T>` is a `payload: T` plus `parents: BTreeSet<ContentId>`, and its
-id (`ContentAddressable::content_id`, aliased as `.id()`) is derived from
-**both** the payload and the parent links — exactly the agent-mesh
-conversation-event shape (event id = the `ContentId` of the canonical event
-*including its parent cids*). The `BTreeSet` deduplicates parents and orders
-them by `ContentId`'s content-derived `Ord`, so equal parent sets always
-produce equal bytes regardless of insertion order; each parent serializes as a
-dag-cbor **tag-42 link**, so a node's parents are real IPLD links.
+**The serialized node layout is experimental and NOT frozen** — pinning it
+(Merkle conformance vectors) is post-`0.1.0` work.
 
-> ⚠️ **Its serialized bytes are NOT frozen.** Unlike the `ContentId` /
-> `canonical` surface above, this feature is experimental. The node's byte
-> layout is pinned only once **Merkle conformance vectors** land (a follow-up
-> toward `0.1.0-rc1`); it depends on (a) the `ContentId` tag-42 serde repr
-> (must-fix gate item 1) and (b) the `payload` / `parents` field key strings.
-> Until those vectors freeze it, changing the node's bytes is **allowed and is
-> not a breaking change** — and merkle vectors are deliberately **kept out of
-> `tests/vectors.json`** (the frozen cross-language byte-parity gate). After
-> `0.1.0`, changing them is a major version bump.
+### `store` — the CID-addressed node store seam
 
-Enable it with `--features merkle` (or `--all-features`):
+A narrow, backend-agnostic seam: `get`/`put` by `ContentId`, with a verified
+read path the extension-trait implementation establishes. The pieces:
 
-```sh
-cargo test --features merkle      # compile + run the merkle module's tests
-```
+- **`NodeStore`** — the raw backend seam (two dumb ops: `get_unverified`,
+  `insert`). Backends implement only this.
+- **`NodeStoreExt`** — blanket-implemented, sealed-by-coherence verified
+  operations (`get`, `get_node`, `put`, `put_checked`, …). A backend cannot
+  *re-implement* them.
+- **`VerifiedStore<B>`** — the recommended capability-safe facade: it exposes
+  only the verified operations (dispatched via UFCS), so a backend's own inherent
+  method cannot intercept a call made through it. **Use this** unless you have a
+  reason to drop to raw ops.
+- **`MemoryStore`** — the grow-only in-memory reference backend.
+- **`AddressedBytes`** — an unforgeable, address-consistent `(id, bytes)` pair;
+  it is the only thing `insert` accepts, so a backend can't be handed a
+  mismatched pair.
 
-CI and the pre-push hook run `--all-features`, so the feature is exercised on
-every push while the plain `cargo test` keeps the default surface green (and
-proves `merkle` stays off by default).
-
-### The `store` feature — the CID-addressed node-store seam (experimental)
-
-A default-**off** cargo feature, `store`, gates `src/store.rs`: the narrow seam
-every Merkle-catalog structure (epic #30) traverses. Backends implement only a
-raw fetch + put (`NodeStore`); the **verified** operations live in
-`NodeStoreExt`, a blanket-implemented extension trait sealed by coherence, so a
-backend cannot *re-implement* verify-on-read — a tampered or substituted node
-read through the trait method surfaces as `VerificationFailed`, never as wrong
-bytes. (Because Rust prefers inherent methods, hold a `VerifiedStore` or call via
-UFCS where a backend's own inherent `get` must not intercept the call.)
+Typed writes/reads are the strict doors:
 
 ```rust
-use content_addressable::store::{MemoryStore, NodeStoreExt as _};
+use content_addressable::store::{MemoryStore, VerifiedStore};
+use content_addressable::{canonical, ContentAddressable, ContentError};
+use serde::{Deserialize, Serialize};
 
-let mut s = MemoryStore::new();               // grow-only reference backend
-let canonical = [0xa0];                       // canonical dag-cbor (empty map)
-let id = s.put(&canonical).unwrap();          // id derived BY THE SEAM
-assert_eq!(s.get(&id).unwrap(), canonical);   // verified read (sealed path)
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Record {
+    name: String,
+}
+
+impl ContentAddressable for Record {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(self)
+    }
+}
+
+let mut store = VerifiedStore::new(MemoryStore::new());
+let record = Record { name: "alpha".into() };
+
+let id = store.put_node(&record)?;               // strict: rejects non-canonical
+let recovered: Record = store.get_node(&id)?;    // identity-preserving typed read
+assert_eq!(record, recovered);
+# Ok::<(), content_addressable::store::StoreError>(())
 ```
 
-Identity derivation lives entirely in the sealed `NodeStoreExt`: a backend
-implements only the two dumb operations (`get_unverified` and `insert` of an
-unforgeable `AddressedBytes`), so it cannot influence the id `put` returns nor be
-handed a mismatched `(id, bytes)` pair, and it cannot *re-implement* the verified
-read. (What a backend does with an accepted mapping — file it correctly, durably,
-without disturbing another — is its own contract, PO-STORE-1B. And because Rust
-prefers inherent methods, hold a `VerifiedStore` or use UFCS where a backend's own
-`get` must not intercept.) The typed doors `s.put_node(&node)` / `s.get_node::<T>(&id)` add `canonical_form`
-+ put and an **identity-preserving** verified read (decode, then re-encode and
-require the value to be named by the id); `s.decode_verified_bytes::<T>(&id)` is
-the lenient sibling that decodes hash-verified bytes without that identity check.
+- `put_node` strictly validates canonical DAG-CBOR before insertion; `put` is
+  unchecked with respect to canonicality (`put_checked` / `put_node` are the
+  strict doors).
+- `get_node` performs an identity-preserving typed read (decode, re-encode, and
+  require the value to be the one named by the id). Raw `get` proves only that
+  the returned bytes hash to the requested CID — not that they are canonical.
 
-The store's contracts — the *seam* theorems (put derives the address;
-verify-on-read soundness for arbitrary backends) and the *backend refinement law*
-(grow-only monotonicity, discharged by `MemoryStore`) — are stated in the module
-docs and exercised by tests, including adversarial-backend tests — except
-PO-STORE-3's divergent-bytes `Collision` branch, which is unreachable in Rust (an
-unforgeable `AddressedBytes` always derives a real id) and is left to the deferred
-forced-collision TLA+ model (#71). The trait API is
-**NON-FROZEN** while the catalog stabilizes; the seam defines no wire bytes of
-its own, so it adds nothing to `tests/vectors.json`. With `merkle` also
-enabled, a whole `MerkleNode` DAG reconstructs from *(root CID, store)* alone —
-see the `store` + `merkle` integration tests.
+**Trust boundary.** The seam derives addresses on write and verifies them on read
+(*seam theorems*). Successful persistence, durability, no-rebind, and grow-only
+behavior are **backend obligations** (*backend refinement laws*), not seam
+theorems — `MemoryStore` discharges its documented in-memory obligations. The
+formal Lean/TLA+ artifacts are **deferred proof targets** (tracked in
+[#71](https://github.com/hartsock/content-addressable/issues/71)); the `store`
+module docs in [`src/store.rs`](src/store.rs) carry the full proof-obligation
+catalog. **The `store` trait/API is experimental and NOT frozen.**
 
-#### Byte-parity gate (`tests/vectors.json`)
+## Stability details
 
-A single shared golden-vector file, `tests/vectors.json`, is generated *from the
-Rust core* (the authority) and consumed verbatim by **both** the Rust gate
-(`tests/conformance.rs`) and the Python gate (`tests/test_content_addressable.py`),
-so any future byte drift — a dependency bump, an encoder change — fails loudly in
-*both* languages. It pins only the **currently-stable, JSON-expressible** dag-cbor
-subset (null, bool, integers, strings, lists, maps with string keys, and byte
-strings via the `{"$bytes": "<hex>"}` escape). Floats, and any value depending on
-the not-yet-frozen `ContentId` serde representation (must-fix-gate item 1), are
-**deliberately excluded**; they will *extend* the vectors once those items freeze.
-Regenerate after an intentional byte change (the reviewable signal that a major
-bump is due) with:
-
-```sh
-cargo test --test gen_vectors -- --ignored gen_vectors
-```
-
-### Not compatible with the pre-alpha Python sibling
-
-This crate is **not byte-compatible** with the earlier pre-alpha Python
-`content-addressable` sibling, which used **SHA3-256 + `pickle`**. That design
-is abandoned here in favor of the IPLD-native stack (BLAKE3 + CIDv1 +
-canonical dag-cbor). Addresses produced by the two are unrelated.
+The frozen `0.1.x` contracts — CID profile, presentation, serde representation,
+error policy, `verify`/`ensure_content_id`, crate-root exports, MSRV/edition, the
+no-rehash digest bridge, and the experimental-feature exclusions — are recorded
+in [`docs/STABILITY.md`](docs/STABILITY.md), with issue provenance. Treat the
+frozen surfaces as durable.
 
 ## Development
 
-```sh
-just check          # fmt + clippy + test (the full local gate)
-just install-hooks  # install .githooks/pre-push (mirrors CI)
+```bash
+just check            # the local gate: fmt + clippy + test + docs + leaf-deps
 ```
 
-Or directly:
-
-```sh
-cargo build
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo fmt -- --check
-```
-
-The pre-push hook (`.githooks/pre-push`) mirrors `.github/workflows/ci.yml`.
-Do not bypass it with `--no-verify`.
+A pre-push hook runs the same checks; the individual `cargo fmt` / `cargo clippy`
+/ `cargo test --all-features` steps work directly too.
 
 ## Releasing
 
-Releases are **tag-driven**: pushing a `v*` tag runs
-[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
-the multi-platform abi3 wheel matrix (Linux `x86_64` + `aarch64`, macOS
-`universal2`, Windows `x64`) plus an sdist and publishes them to **PyPI via
-Trusted Publishing (OIDC — no stored token)** and the **core crate to
-crates.io**. The deprecated, laptop-bound `maturin upload` path is retired. See
-[RELEASING.md](RELEASING.md) for the runbook and the one-time Trusted Publisher
-setup.
+Tag-driven; see [`RELEASING.md`](RELEASING.md) for the wheel matrix, PyPI Trusted
+Publishing, and crates.io steps.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0.
