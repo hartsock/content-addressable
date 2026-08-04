@@ -334,7 +334,10 @@ the lenient sibling that decodes hash-verified bytes without that identity check
 
 The seam's laws (put derives the address; verify-on-read soundness for
 arbitrary backends; grow-only monotonicity) are stated in the module docs and
-enforced by tests, including adversarial-backend tests. The trait API is
+exercised by tests, including adversarial-backend tests — except PO-STORE-3's
+divergent-bytes `Collision` branch, which is unreachable in Rust (an unforgeable
+`AddressedBytes` always derives a real id) and is left to the deferred
+forced-collision TLA+ model (#71). The trait API is
 **NON-FROZEN** while the catalog stabilizes; the seam defines no wire bytes of
 its own, so it adds nothing to `tests/vectors.json`. With `merkle` also
 enabled, a whole `MerkleNode` DAG reconstructs from *(root CID, store)* alone —

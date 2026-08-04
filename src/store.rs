@@ -40,15 +40,20 @@
 //! hash, so the laws never name a hash function:
 //!
 //! - **PO-STORE-1A (put derives the address) \[proof target: Lean, deferred\]** —
-//!   [`NodeStoreExt::put`]`(b)` returns exactly
-//!   [`ContentId::from_canonical_bytes`]`(b)` for canonical `b`; consequently
-//!   [`put_node`](NodeStoreExt::put_node)`(n)` equals `n.content_id()`. This is
-//!   **sealed**: the id is derived in the blanket-implemented extension, and the
-//!   backend's only write op ([`insert`](NodeStore::insert)) receives an
-//!   unforgeable [`AddressedBytes`] whose id it *cannot* have chosen — so a backend
-//!   cannot influence the id `put` returns, nor be handed bytes that do not derive
-//!   their key. Addressing is a pure function of content. (What a backend does
-//!   *with* a well-formed pair — file it correctly, durably, without disturbing
+//!   the **seam theorem** is [`put_node`](NodeStoreExt::put_node)`(n)` returns
+//!   `Address(n.canonical_form())` (equivalently [`put`](NodeStoreExt::put)`(b)`
+//!   returns [`ContentId::from_canonical_bytes`]`(b)`). This is **sealed**: the id
+//!   is derived in the blanket-implemented extension, and the backend's only write
+//!   op ([`insert`](NodeStore::insert)) receives an unforgeable [`AddressedBytes`]
+//!   whose id it *cannot* have chosen — so a backend cannot influence the id `put`
+//!   returns, nor be handed bytes that do not derive their key. Addressing is a pure
+//!   function of content. The corollary `put_node(n) == n.content_id()` holds
+//!   **only for a lawful [`ContentAddressable`]** — one whose (overridable)
+//!   `content_id` honors `content_id() == Address(canonical_form())`; the seam
+//!   cannot prove it for an arbitrary impl and does not rely on it (`put_node` uses
+//!   the strict [`put_checked`](NodeStoreExt::put_checked), so a non-canonical
+//!   `canonical_form` is a write-time error, not a mis-stamped id). (What a backend
+//!   does *with* a well-formed pair — file it correctly, durably, without disturbing
 //!   another entry — is PO-STORE-1B, not this law.)
 //! - **PO-STORE-1B (backend acknowledgement) \[proof target: TLA+, a backend law, deferred\]** — that
 //!   [`insert`](NodeStore::insert) returned `Ok` means only that the backend
@@ -73,8 +78,9 @@
 //!   `id → bytes` map only grows and a mapping is never rebound: re-inserting the
 //!   *same* bytes is idempotent, and inserting *different* bytes under a live id
 //!   **fails closed** with [`StoreError::Collision`], leaving state unchanged. The
-//!   law therefore does NOT lean on hash injectivity — a collision (or a caller
-//!   passing a mismatched `(id, bytes)`) cannot silently rebind. This is the
+//!   law therefore does NOT lean on hash injectivity — a genuine collision cannot
+//!   silently rebind (and a mismatched `(id, bytes)` is itself unrepresentable via
+//!   the unforgeable [`AddressedBytes`]). This is the
 //!   invariant a future GC/eviction design must consciously renegotiate, which is
 //!   why deletion is a non-goal here.
 //!
@@ -93,8 +99,9 @@
 //! This module is gated behind the default-**off** `store` cargo feature, and
 //! its trait API is **NOT frozen**: signatures may change without a breaking-
 //! change ceremony until the catalog stabilizes (epic #30's release ladder).
-//! The seam defines **no new wire bytes of its own** — it stores canonical
-//! bytes whose layout is owned elsewhere — so nothing here is added to
+//! The seam defines **no new wire bytes of its own** — it stores bytes whose
+//! layout is owned elsewhere (canonical dag-cbor when written through the typed
+//! `put_node` / `put_checked` doors; the raw `put` is unchecked) — so nothing here is added to
 //! `tests/vectors.json` (the frozen cross-language parity gate deliberately
 //! excludes experimental surfaces).
 //!
@@ -195,8 +202,9 @@ pub enum StoreError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    /// An occupied id was asked to hold *different* bytes — a store-invariant
-    /// violation (a hash collision, or a caller inserting mismatched `(id, bytes)`).
+    /// An occupied id was asked to hold *different* bytes — reachable only by a
+    /// genuine hash collision (a mismatched `(id, bytes)` is unrepresentable via the
+    /// unforgeable [`AddressedBytes`]).
     ///
     /// The store **fails closed**: it never overwrites, so this makes the grow-only
     /// law (PO-STORE-3) hold *without* leaning on hash injectivity. Re-inserting
@@ -303,8 +311,8 @@ impl std::fmt::Display for StoreOperation {
     }
 }
 
-/// The narrow seam every structure traverses: raw fetch and store of canonical
-/// bytes, keyed by [`ContentId`].
+/// The narrow seam every structure traverses: raw fetch and store of bytes, keyed
+/// by [`ContentId`] (canonicality is the typed doors' concern, not this raw seam's).
 ///
 /// Backends implement **only** these two operations. The verified operations —
 /// the ones structures actually call — live in [`NodeStoreExt`], which is
@@ -493,6 +501,11 @@ pub trait NodeStoreExt: NodeStore {
         T: DeserializeOwned + ContentAddressable,
     {
         let original = self.get(id)?;
+        // Independently prove the stored bytes are canonical dag-cbor BEFORE trusting
+        // any `T` — so the typed guarantee does not lean on `T::canonical_form` being
+        // a lawful (canonical) implementation. Non-canonical bytes (however they were
+        // stored) are rejected here as `NonCanonical`, not silently round-tripped.
+        ContentId::from_canonical_bytes_checked(&original)?;
         let value: T = canonical::from_canonical_dagcbor(&original)?;
         let reencoded = value.canonical_form()?;
         if reencoded != original {
@@ -504,26 +517,58 @@ pub trait NodeStoreExt: NodeStore {
         Ok(value)
     }
 
-    /// Encode a [`ContentAddressable`] node canonically and store it.
+    /// Encode a [`ContentAddressable`] node and store it **strictly**.
     ///
-    /// The returned id equals `node.content_id()` (PO-STORE-1): storing a value
-    /// and addressing a value are the same pure function of its content.
+    /// Because [`ContentAddressable`] only requires *determinism* (equal values ⇒
+    /// equal bytes), not canonical dag-cbor, this routes through
+    /// [`put_checked`](Self::put_checked): a `canonical_form` that returns
+    /// non-canonical CBOR (or non-CBOR) is a **write-time error** here, not a
+    /// DAG-CBOR-stamped id naming bytes that are not DAG-CBOR. So the seam does not
+    /// trust a trait law it cannot enforce.
+    ///
+    /// The returned id is `Address(node.canonical_form())` (the seam theorem, PO-STORE-1A).
+    /// It equals `node.content_id()` **only for a lawful implementation** — one whose
+    /// (overridable) `content_id` honors `content_id() == Address(canonical_form())`.
     ///
     /// # Errors
     ///
     /// [`StoreError::Content`] wrapping an encoding failure from
-    /// [`canonical_form`](crate::ContentAddressable::canonical_form), or any
-    /// error from the backend [`insert`](NodeStore::insert).
+    /// [`canonical_form`](crate::ContentAddressable::canonical_form), or a
+    /// [`ContentError::NonCanonical`] / [`ContentError::DecodingError`] if that
+    /// output is not canonical dag-cbor; or any error from the backend
+    /// [`insert`](NodeStore::insert).
     fn put_node<T: ContentAddressable + ?Sized>(
         &mut self,
         node: &T,
     ) -> Result<ContentId, StoreError> {
         let bytes = node.canonical_form()?;
-        self.put(&bytes)
+        self.put_checked(&bytes)
     }
 }
 
 impl<S: NodeStore + ?Sized> NodeStoreExt for S {}
+
+// Forwarding impls so the verified surface composes with the advertised dynamic and
+// borrowed forms: `VerifiedStore::new(Box::<dyn NodeStore>::new(..))` and
+// `VerifiedStore::new(&mut backend)` both need `B: NodeStore`. (Method calls already
+// worked through deref; wrapping a backend in the facade needs the trait itself.)
+impl<S: NodeStore + ?Sized> NodeStore for Box<S> {
+    fn get_unverified(&self, id: &ContentId) -> Result<Vec<u8>, StoreError> {
+        (**self).get_unverified(id)
+    }
+    fn insert(&mut self, item: AddressedBytes<'_>) -> Result<(), StoreError> {
+        (**self).insert(item)
+    }
+}
+
+impl<S: NodeStore + ?Sized> NodeStore for &mut S {
+    fn get_unverified(&self, id: &ContentId) -> Result<Vec<u8>, StoreError> {
+        (**self).get_unverified(id)
+    }
+    fn insert(&mut self, item: AddressedBytes<'_>) -> Result<(), StoreError> {
+        (**self).insert(item)
+    }
+}
 
 /// The in-memory reference backend: a grow-only `id → bytes` map.
 ///

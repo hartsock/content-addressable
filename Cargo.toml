@@ -44,8 +44,8 @@ merkle = []
 # that every Merkle-catalog structure traverses (epic #30, issue #31).
 # Default-OFF, same posture as `merkle`: a plain `cargo build` / `cargo test`
 # does NOT compile it, and its trait API is NON-FROZEN until the catalog
-# stabilizes. It defines no wire bytes of its own (it stores canonical bytes
-# whose layout is owned elsewhere), so it adds nothing to tests/vectors.json.
+# stabilizes. It defines no wire bytes of its own (it stores bytes whose layout
+# is owned elsewhere), so it adds nothing to tests/vectors.json.
 # CI and the pre-push hook exercise it via `--all-features`.
 store = []
 

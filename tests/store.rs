@@ -442,6 +442,82 @@ fn verified_store_defeats_inherent_method_shadowing() {
     );
 }
 
+/// A deterministic-but-NON-canonical-dag-cbor `ContentAddressable` — lawful under
+/// the trait's *determinism* contract, but not the canonical dag-cbor the typed
+/// store doors assume. The review's r4 write/read-asymmetry witness.
+struct BadNode;
+impl ContentAddressable for BadNode {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        Ok(b"deterministic, but not dag-cbor".to_vec())
+    }
+}
+
+#[test]
+fn put_node_rejects_a_non_canonical_content_addressable() {
+    // r4 P1/P2: `put_node` must NOT stamp a DAG-CBOR CID over non-DAG-CBOR bytes.
+    // Routing through `put_checked` turns a broken `ContentAddressable` into a
+    // WRITE-time error, not a permanently mis-stamped id `get_node` can't decode.
+    let mut store = MemoryStore::new();
+    let err = store
+        .put_node(&BadNode)
+        .expect_err("a non-canonical node must be rejected at write");
+    assert!(
+        matches!(
+            err,
+            StoreError::Content(ContentError::DecodingError { .. } | ContentError::NonCanonical)
+        ),
+        "put_node must reject non-canonical bytes, got {err:?}"
+    );
+    assert_eq!(store.len(), 0, "nothing was stored");
+}
+
+#[test]
+fn get_node_rejects_non_canonical_stored_bytes_before_trusting_t() {
+    // Non-canonical bytes that entered via the raw (unchecked) `put` are rejected by
+    // the identity-preserving read BEFORE any `T` is trusted — so the typed guarantee
+    // does not lean on `T::canonical_form` being lawful.
+    let mut store = MemoryStore::new();
+    let id = store
+        .put(&NON_CANONICAL)
+        .expect("raw put accepts any bytes");
+    let err = store
+        .get_node::<OnlyAlpha>(&id)
+        .expect_err("non-canonical stored bytes must be rejected");
+    assert!(
+        matches!(
+            err,
+            StoreError::Content(ContentError::NonCanonical | ContentError::DecodingError { .. })
+        ),
+        "get_node must reject non-canonical bytes, got {err:?}"
+    );
+}
+
+#[test]
+fn verified_store_wraps_boxed_and_borrowed_backends() {
+    // The facade composes with the advertised dynamic + borrowed forms (the forwarding
+    // `NodeStore for Box<S>` / `&mut S` impls), so `VerifiedStore` is genuinely the
+    // universal verified capability.
+    let boxed: Box<dyn NodeStore> = Box::new(MemoryStore::new());
+    let mut v = VerifiedStore::new(boxed);
+    let id = v
+        .put(&canonical_map(1))
+        .expect("put through a boxed dyn backend");
+    assert_eq!(
+        v.get(&id).expect("get through the facade"),
+        canonical_map(1)
+    );
+
+    let mut backing = MemoryStore::new();
+    {
+        let mut vb = VerifiedStore::new(&mut backing);
+        let id2 = vb
+            .put(&canonical_map(2))
+            .expect("put through a &mut backend");
+        assert_eq!(vb.get(&id2).expect("get"), canonical_map(2));
+    }
+    assert_eq!(backing.len(), 1, "the borrowed backend received the write");
+}
+
 #[test]
 fn store_error_has_backend_and_collision_representations() {
     // Review finding #1: a downstream disk/network backend can construct a truthful
