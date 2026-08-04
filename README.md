@@ -332,11 +332,12 @@ prefers inherent methods, hold a `VerifiedStore` or use UFCS where a backend's o
 require the value to be named by the id); `s.decode_verified_bytes::<T>(&id)` is
 the lenient sibling that decodes hash-verified bytes without that identity check.
 
-The seam's laws (put derives the address; verify-on-read soundness for
-arbitrary backends; grow-only monotonicity) are stated in the module docs and
-exercised by tests, including adversarial-backend tests — except PO-STORE-3's
-divergent-bytes `Collision` branch, which is unreachable in Rust (an unforgeable
-`AddressedBytes` always derives a real id) and is left to the deferred
+The store's contracts — the *seam* theorems (put derives the address;
+verify-on-read soundness for arbitrary backends) and the *backend refinement law*
+(grow-only monotonicity, discharged by `MemoryStore`) — are stated in the module
+docs and exercised by tests, including adversarial-backend tests — except
+PO-STORE-3's divergent-bytes `Collision` branch, which is unreachable in Rust (an
+unforgeable `AddressedBytes` always derives a real id) and is left to the deferred
 forced-collision TLA+ model (#71). The trait API is
 **NON-FROZEN** while the catalog stabilizes; the seam defines no wire bytes of
 its own, so it adds nothing to `tests/vectors.json`. With `merkle` also
