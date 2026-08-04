@@ -300,6 +300,50 @@ CI and the pre-push hook run `--all-features`, so the feature is exercised on
 every push while the plain `cargo test` keeps the default surface green (and
 proves `merkle` stays off by default).
 
+### The `store` feature — the CID-addressed node-store seam (experimental)
+
+A default-**off** cargo feature, `store`, gates `src/store.rs`: the narrow seam
+every Merkle-catalog structure (epic #30) traverses. Backends implement only a
+raw fetch + put (`NodeStore`); the **verified** operations live in
+`NodeStoreExt`, a blanket-implemented extension trait sealed by coherence, so a
+backend cannot *re-implement* verify-on-read — a tampered or substituted node
+read through the trait method surfaces as `VerificationFailed`, never as wrong
+bytes. (Because Rust prefers inherent methods, hold a `VerifiedStore` or call via
+UFCS where a backend's own inherent `get` must not intercept the call.)
+
+```rust
+use content_addressable::store::{MemoryStore, NodeStoreExt as _};
+
+let mut s = MemoryStore::new();               // grow-only reference backend
+let canonical = [0xa0];                       // canonical dag-cbor (empty map)
+let id = s.put(&canonical).unwrap();          // id derived BY THE SEAM
+assert_eq!(s.get(&id).unwrap(), canonical);   // verified read (sealed path)
+```
+
+Identity derivation lives entirely in the sealed `NodeStoreExt`: a backend
+implements only the two dumb operations (`get_unverified` and `insert` of an
+unforgeable `AddressedBytes`), so it cannot influence the id `put` returns nor be
+handed a mismatched `(id, bytes)` pair, and it cannot *re-implement* the verified
+read. (What a backend does with an accepted mapping — file it correctly, durably,
+without disturbing another — is its own contract, PO-STORE-1B. And because Rust
+prefers inherent methods, hold a `VerifiedStore` or use UFCS where a backend's own
+`get` must not intercept.) The typed doors `s.put_node(&node)` / `s.get_node::<T>(&id)` add `canonical_form`
++ put and an **identity-preserving** verified read (decode, then re-encode and
+require the value to be named by the id); `s.decode_verified_bytes::<T>(&id)` is
+the lenient sibling that decodes hash-verified bytes without that identity check.
+
+The store's contracts — the *seam* theorems (put derives the address;
+verify-on-read soundness for arbitrary backends) and the *backend refinement law*
+(grow-only monotonicity, discharged by `MemoryStore`) — are stated in the module
+docs and exercised by tests, including adversarial-backend tests — except
+PO-STORE-3's divergent-bytes `Collision` branch, which is unreachable in Rust (an
+unforgeable `AddressedBytes` always derives a real id) and is left to the deferred
+forced-collision TLA+ model (#71). The trait API is
+**NON-FROZEN** while the catalog stabilizes; the seam defines no wire bytes of
+its own, so it adds nothing to `tests/vectors.json`. With `merkle` also
+enabled, a whole `MerkleNode` DAG reconstructs from *(root CID, store)* alone —
+see the `store` + `merkle` integration tests.
+
 #### Byte-parity gate (`tests/vectors.json`)
 
 A single shared golden-vector file, `tests/vectors.json`, is generated *from the
