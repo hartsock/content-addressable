@@ -24,7 +24,7 @@ a fixed profile:
 
 Rust is the core implementation; the Python package is a PyO3 binding over that
 **same Rust core**, so an id computed in Python is byte-identical to the one Rust
-computes for the same value.
+computes for the same canonical IPLD value.
 
 ## Status & stability
 
@@ -35,7 +35,7 @@ are still moving.
 
 | Surface | Default | Stability |
 |---------|:-------:|-----------|
-| `ContentId`, canonical encoding, core errors, presentation, MSRV | Yes | **Frozen for `0.1.x`** — changing any is a major bump |
+| `ContentId`, canonical encoding, core errors, presentation, MSRV | Yes | **Frozen for `0.1.x`** — changing any is a breaking release outside `0.1.x` |
 | Python core parity | Separate package | Same core byte profile |
 | `merkle` feature | No | **Experimental** — serialized node bytes NOT frozen |
 | `store` feature | No | **Experimental** — trait/API surface NOT frozen (no new wire format of its own) |
@@ -109,8 +109,9 @@ secondary digest and binary presentation forms are in
 
 The Python face exposes the same byte profile, but **not** the Rust
 `ContentAddressable` trait or `verify` — you canonicalize a native Python value
-and take its `content_id` directly. This block is mirrored verbatim by
-`tests/test_readme.py`, so CI's `python` job proves every call still works:
+and take its `content_id` directly. This block is mirrored by
+`tests/test_readme.py` (every call identical), so CI's `python` job proves it
+still works:
 
 ```python
 from content_addressable import (
@@ -153,14 +154,14 @@ precondition — it is **not** universally safe.
 |----------|---------------------|----------|
 | Hash a normal value | `value.content_id()` / `content_id(value)` | **Preferred safe path** |
 | Encode a value to bytes | `canonical::to_canonical_dagcbor(v)` / `to_canonical_dagcbor(v)` | Produces canonical DAG-CBOR |
-| Accept foreign / untrusted bytes | `ContentId::from_canonical_bytes_checked(b)` | Validates DAG-CBOR canonicality; errors on non-canonical |
+| Accept foreign / untrusted bytes | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: *no single checked constructor yet* | Validates DAG-CBOR canonicality; errors on non-canonical |
 | Hash already-trusted canonical bytes | `ContentId::from_canonical_bytes(b)` | **Unchecked** precondition: caller asserts `b` is canonical DAG-CBOR |
 | Wrap an existing BLAKE3 digest | `ContentId::from_blake3_content_digest(d)` | No rehash; caller asserts the digest is BLAKE3 over canonical DAG-CBOR |
 
 ## Presentation forms
 
 A `ContentId` names four distinct presentation forms so callers can't confuse
-them; each is frozen (changing any is a major bump):
+them; each is frozen (changing any is a breaking release outside `0.1.x`):
 
 | Form | Rust | Python | What it is |
 |------|------|--------|------------|
@@ -260,9 +261,8 @@ behavior are **backend obligations** (*backend refinement laws*), not seam
 theorems — `MemoryStore` discharges its documented in-memory obligations. The
 formal Lean/TLA+ artifacts are **deferred proof targets** (tracked in
 [#71](https://github.com/hartsock/content-addressable/issues/71)); the `store`
-[module docs](https://docs.rs/content-addressable) carry the full
-proof-obligation catalog. **The `store` trait/API is experimental and NOT
-frozen.**
+module docs in [`src/store.rs`](src/store.rs) carry the full proof-obligation
+catalog. **The `store` trait/API is experimental and NOT frozen.**
 
 ## Stability details
 

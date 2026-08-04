@@ -1,7 +1,7 @@
 # Stability contracts
 
 What is **frozen** for the `0.1.x` line, and what is not. A frozen contract is a
-stability guarantee: changing any of these is a **major version bump**. The
+stability guarantee: changing any of these is a **breaking release outside `0.1.x`**. The
 package is `0.1.0-alpha.1` — alpha *as a package* — but the contracts below are
 already locked, so downstream systems can persist and link against them today.
 
@@ -23,9 +23,12 @@ Every id is a **CIDv1** with a fixed shape, built as
 | Digest length | 32 bytes | ✓ |
 
 The hash and codec are **fixed, not selectable** for `0.1.x`. The **serde
-representation** of `ContentId` is frozen: a DAG-CBOR **tag-42 link** (binary
-form) via the inner `Cid`'s serde, pinned by a full-byte golden test in
-`tests/vectors.json` and asserted in both the Rust and Python gates.
+representation** of `ContentId` is frozen: it serializes as a DAG-CBOR **tag-42
+link** via the inner `Cid`'s serde. The cross-language byte gate
+`tests/vectors.json` — asserted in both the Rust (`tests/conformance.rs`) and
+Python conformance tests — pins the canonical DAG-CBOR bytes, the base32 CID text,
+the CID **binary envelope** (`to_bytes()`), and `digest_hex`, so an id's public
+byte forms cannot drift across languages.
 
 ### Canonical encoding
 
@@ -79,7 +82,7 @@ conventions exist for a CID in the wild:
 ### Error policy ([#7])
 
 `ContentError` is `#[non_exhaustive]`, so variants may be **added** additively
-without a major bump. The codec source types are hidden behind
+without a breaking release outside `0.1.x`. The codec source types are hidden behind
 `Box<dyn Error + Send + Sync + 'static>` (no `serde_ipld_dagcbor` generics leak
 into the public signature); `InvalidCid` preserves the underlying `cid::Error` as
 a `#[source]`. There are no `#[from]` impls (a deliberate freeze decision).
@@ -102,7 +105,7 @@ codec/hash codes `DAG_CBOR_CODEC` / `BLAKE3_HASH_CODE` are `pub` in `content_id`
 but deliberately **not** promoted to the crate root; `BLAKE3_DIGEST_LEN` is
 private. `MerkleNode` is re-exported only under the experimental `merkle` feature;
 the `store` surface only under the experimental `store` feature. Removing or
-narrowing a frozen export after `0.1.0` is a major bump; *adding* one is allowed.
+narrowing a frozen export after `0.1.0` is a breaking release outside `0.1.x`; *adding* one is allowed.
 
 ### MSRV & edition ([#9])
 
@@ -134,7 +137,7 @@ serde repr and (b) the payload / parents field-key strings; it is pinned only
 once Merkle conformance vectors land (post-`0.1.0`). Merkle vectors are
 deliberately kept out of `tests/vectors.json` (the frozen cross-language
 byte-parity gate). Until then, changing the node bytes is **not** a breaking
-change. After `0.1.0` freezes them, it is a major bump.
+change. After `0.1.0` freezes them, it is a breaking release outside `0.1.x`.
 
 ### The `store` feature — experimental API
 
