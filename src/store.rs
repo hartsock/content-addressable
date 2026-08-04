@@ -74,15 +74,18 @@
 //!   substitution surfaces as [`ContentError::VerificationFailed`], never as wrong
 //!   bytes. This holds for arbitrary backends because `get` is blanket-implemented
 //!   and sealed by coherence.
-//! - **PO-STORE-3 (grow-only monotonicity, fail-closed) \[proof target: TLA+, deferred\]** — the store's
-//!   `id → bytes` map only grows and a mapping is never rebound: re-inserting the
-//!   *same* bytes is idempotent, and inserting *different* bytes under a live id
-//!   **fails closed** with [`StoreError::Collision`], leaving state unchanged. The
-//!   law therefore does NOT lean on hash injectivity — a genuine collision cannot
-//!   silently rebind (and a mismatched `(id, bytes)` is itself unrepresentable via
-//!   the unforgeable [`AddressedBytes`]). This is the
-//!   invariant a future GC/eviction design must consciously renegotiate, which is
-//!   why deletion is a non-goal here.
+//! - **PO-STORE-3 (grow-only monotonicity, fail-closed) \[proof target: TLA+, a backend law, deferred\]** —
+//!   a *conforming* backend's `id → bytes` map only grows and a mapping is never
+//!   rebound: re-inserting the *same* bytes is idempotent, and *different* bytes
+//!   under a live id **fail closed** with [`StoreError::Collision`], leaving state
+//!   unchanged. Like PO-STORE-1B this is a **backend** obligation, NOT a seam
+//!   theorem: [`AddressedBytes`] proves only that the pair handed to a backend is
+//!   address-consistent — it cannot stop an arbitrary backend from deleting or
+//!   overwriting an *unrelated* mapping, so the blanket seam / [`VerifiedStore`] do
+//!   not establish grow-only for arbitrary backends. [`MemoryStore`] **discharges**
+//!   it (its occupied-different branch fails closed without mutation; the law never
+//!   leans on hash injectivity). This is the invariant a future GC/eviction design
+//!   must consciously renegotiate, which is why deletion is a non-goal here.
 //!
 //! The `[proof target: …]` tags mark **deferred** obligations — the mechanized
 //! Lean/TLA+ artifacts are NOT yet shipped (a follow-up stands up a forced-collision
@@ -491,10 +494,18 @@ pub trait NodeStoreExt: NodeStore {
     ///
     /// # Errors
     ///
-    /// Everything [`get`](Self::get) can return; [`StoreError::Content`] wrapping
-    /// [`ContentError::DecodingError`] if the bytes do not decode as a `T` or
-    /// [`ContentError::EncodingError`] if the value fails to re-encode; and
-    /// [`StoreError::RepresentationMismatch`] if the re-encoded bytes are not the
+    /// Everything [`get`](Self::get) can return, plus [`StoreError::Content`]
+    /// wrapping, by stage:
+    /// - **canonicality check** ([`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked)):
+    ///   [`ContentError::DecodingError`] (not dag-cbor), [`ContentError::NonCanonical`]
+    ///   (valid CBOR, non-canonical), or [`ContentError::EncodingError`] (the generic
+    ///   IPLD re-encode inside the check fails) — distinct from `T::canonical_form`;
+    /// - **typed decode** ([`from_canonical_dagcbor`](canonical::from_canonical_dagcbor)):
+    ///   [`ContentError::DecodingError`] if the bytes do not decode as a `T`;
+    /// - **`T::canonical_form`**: whatever [`ContentError`] it returns (typically
+    ///   [`ContentError::EncodingError`]);
+    ///
+    /// and [`StoreError::RepresentationMismatch`] if the re-encoded bytes are not the
     /// bytes named by `id` (a lossy/aliased decode).
     fn get_node<T>(&self, id: &ContentId) -> Result<T, StoreError>
     where
@@ -532,10 +543,13 @@ pub trait NodeStoreExt: NodeStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Content`] wrapping an encoding failure from
-    /// [`canonical_form`](crate::ContentAddressable::canonical_form), or a
-    /// [`ContentError::NonCanonical`] / [`ContentError::DecodingError`] if that
-    /// output is not canonical dag-cbor; or any error from the backend
+    /// [`StoreError::Content`] wrapping, by stage: an encoding failure from
+    /// [`canonical_form`](crate::ContentAddressable::canonical_form) (typically
+    /// [`ContentError::EncodingError`]); then, from the strict
+    /// [`put_checked`](Self::put_checked) canonicality check on that output,
+    /// [`ContentError::DecodingError`] (not dag-cbor), [`ContentError::NonCanonical`]
+    /// (valid CBOR, non-canonical), or [`ContentError::EncodingError`] (the check's
+    /// own re-encode fails); or any error from the backend
     /// [`insert`](NodeStore::insert).
     fn put_node<T: ContentAddressable + ?Sized>(
         &mut self,
