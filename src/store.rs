@@ -80,8 +80,13 @@
 //!
 //! The `[proof target: …]` tags mark **deferred** obligations — the mechanized
 //! Lean/TLA+ artifacts are NOT yet shipped (a follow-up stands up a forced-collision
-//! TLA+ model + Lean read/insert laws). What ships today is the design plus the
-//! laws' executable counterparts in `tests/store.rs`.
+//! TLA+ model + Lean read/insert laws). What ships today is the design plus
+//! executable counterparts in `tests/store.rs` for *most* of the laws. The one
+//! exception is PO-STORE-3's `Collision` branch (divergent bytes under a live id):
+//! because [`AddressedBytes`] always derives a real BLAKE3 id, that branch is only
+//! reachable via a genuine hash collision, so it has **no** executable Rust
+//! counterpart — it is the deferred forced-collision TLA+ model's job (tracked as a
+//! follow-up issue), not something `tests/store.rs` exercises.
 //!
 //! # ⚠️ EXPERIMENTAL — default-off feature, API NON-FROZEN
 //!
@@ -217,16 +222,37 @@ pub enum StoreError {
     },
 }
 
-/// An **addressed** byte slice: canonical bytes paired with the id they derive —
+/// An **address-consistent** byte slice: bytes paired with the id they derive —
 /// the only thing a [`NodeStore::insert`] can be handed.
 ///
-/// The pair is unforgeable: the field is private and its constructor is
+/// It witnesses exactly one relationship — `id() == from_canonical_bytes(bytes())`
+/// — and deliberately **not** canonicality. The id comes from the *unchecked*
+/// [`ContentId::from_canonical_bytes`], and [`NodeStoreExt::put`] accepts any byte
+/// slice, so `bytes()` may be non-canonical dag-cbor (validate ingest with
+/// [`put_checked`](NodeStoreExt::put_checked); establish typed identity with
+/// [`get_node`](NodeStoreExt::get_node)). A backend author must NOT infer
+/// canonicality from this type.
+///
+/// The pair is unforgeable: the field is private and the constructor is
 /// crate-internal, so *only the sealed seam* mints one (from bytes it hashes). An
 /// external caller cannot construct a mismatched `(id, bytes)` pair, so a backend
-/// can never be poisoned with bytes that do not derive their key — the `id` a
-/// backend files under is provably `from_canonical_bytes(bytes)`. This moves
+/// can never be poisoned with bytes that do not derive their key. This moves
 /// PO-STORE-1A's sealing from "the seam promises to derive the id" to "a backend
 /// cannot even be handed a wrong one".
+///
+/// The unforgeability is compiler-enforced — neither of these builds downstream:
+///
+/// ```compile_fail
+/// # use content_addressable::store::AddressedBytes;
+/// // the id-deriving constructor is crate-internal:
+/// let _ = AddressedBytes::new(b"anything");
+/// ```
+///
+/// ```compile_fail
+/// # use content_addressable::{ContentId, store::AddressedBytes};
+/// // the fields are private, so a mismatched literal cannot be built either:
+/// let _ = AddressedBytes { id: ContentId::from_canonical_bytes(b"a"), bytes: b"b" };
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct AddressedBytes<'a> {
     id: ContentId,
@@ -249,7 +275,8 @@ impl<'a> AddressedBytes<'a> {
         self.id
     }
 
-    /// The canonical bytes.
+    /// The bytes (paired with the id they derive — not necessarily canonical; see
+    /// the type docs).
     #[must_use]
     pub fn bytes(&self) -> &'a [u8] {
         self.bytes
@@ -295,13 +322,12 @@ pub trait NodeStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::NotFound`] if the store holds no bytes for `id`; a
-    /// fallible backend surfaces its own failures through a variant added
-    /// additively (the enum is `#[non_exhaustive]` for exactly that).
+    /// [`StoreError::NotFound`] if the store holds no bytes for `id`; a fallible
+    /// backend surfaces its own I/O failure through [`StoreError::Backend`].
     fn get_unverified(&self, id: &ContentId) -> Result<Vec<u8>, StoreError>;
 
-    /// File an [`AddressedBytes`] — a dumb write of canonical bytes under the id
-    /// they derive.
+    /// File an [`AddressedBytes`] — a dumb write of address-consistent bytes under
+    /// the id they derive (not necessarily canonical; see [`AddressedBytes`]).
     ///
     /// The backend does **not** compute the id and cannot be handed a wrong one:
     /// [`AddressedBytes`] is unforgeable (only the sealed seam mints it, by hashing
@@ -458,9 +484,9 @@ pub trait NodeStoreExt: NodeStore {
     /// # Errors
     ///
     /// Everything [`get`](Self::get) can return; [`StoreError::Content`] wrapping
-    /// [`ContentError::DecodingError`] if the bytes do not decode as a `T`,
-    /// [`ContentError::EncodingError`] if the value fails to re-encode, or
-    /// [`ContentError::VerificationFailed`] if the re-encoded bytes are not the
+    /// [`ContentError::DecodingError`] if the bytes do not decode as a `T` or
+    /// [`ContentError::EncodingError`] if the value fails to re-encode; and
+    /// [`StoreError::RepresentationMismatch`] if the re-encoded bytes are not the
     /// bytes named by `id` (a lossy/aliased decode).
     fn get_node<T>(&self, id: &ContentId) -> Result<T, StoreError>
     where
@@ -580,13 +606,12 @@ impl<B: NodeStore> VerifiedStore<B> {
         Self { backend }
     }
 
-    /// Borrow the underlying backend (its raw, unverified operations).
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-
-    /// Consume the facade, returning the backend.
-    pub fn into_backend(self) -> B {
+    /// **Consume** the facade, returning the raw backend — an explicit capability
+    /// *downgrade*. There is deliberately no `&B` accessor: a borrow would let code
+    /// holding `&VerifiedStore<_>` tunnel underneath it (`v.backend().get_unverified(..)`
+    /// or a hostile inherent `v.backend().get(..)`), re-opening exactly the bypass
+    /// this facade closes. Downgrading requires *ownership* and reads as one.
+    pub fn into_unverified_backend(self) -> B {
         self.backend
     }
 

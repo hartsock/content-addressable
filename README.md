@@ -321,9 +321,13 @@ assert_eq!(s.get(&id).unwrap(), canonical);   // verified read (sealed path)
 ```
 
 Identity derivation lives entirely in the sealed `NodeStoreExt`: a backend
-implements only the two dumb operations (`get_unverified` and `insert` at a
-seam-supplied id), so it can never mint or rebind an id, nor skip verify-on-read.
-The typed doors `s.put_node(&node)` / `s.get_node::<T>(&id)` add `canonical_form`
+implements only the two dumb operations (`get_unverified` and `insert` of an
+unforgeable `AddressedBytes`), so it cannot influence the id `put` returns nor be
+handed a mismatched `(id, bytes)` pair, and it cannot *re-implement* the verified
+read. (What a backend does with an accepted mapping — file it correctly, durably,
+without disturbing another — is its own contract, PO-STORE-1B. And because Rust
+prefers inherent methods, hold a `VerifiedStore` or use UFCS where a backend's own
+`get` must not intercept.) The typed doors `s.put_node(&node)` / `s.get_node::<T>(&id)` add `canonical_form`
 + put and an **identity-preserving** verified read (decode, then re-encode and
 require the value to be named by the id); `s.decode_verified_bytes::<T>(&id)` is
 the lenient sibling that decodes hash-verified bytes without that identity check.

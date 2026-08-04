@@ -361,7 +361,8 @@ fn a_mismatched_insert_is_unrepresentable_and_repeat_writes_are_idempotent() {
     // consistent (its constructor is crate-internal and DERIVES the id). External
     // code cannot build a mismatched pair, so a vacant slot can never be poisoned
     // with bytes that do not derive their key — the old `store.insert(id, &hostile)`
-    // attack does not typecheck. (See `tests/compile_fail/` note in the PR body.)
+    // attack does not typecheck (proved by the `compile_fail` doctests on
+    // `AddressedBytes` — a compiler-enforced invariant gets a compiler test).
     //
     // What remains testable through the public API is that the ONLY write path,
     // `put`, files consistent pairs and is idempotent / grow-only.
