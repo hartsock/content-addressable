@@ -10,7 +10,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use ipld_core::cid::multihash::Multihash;
-use ipld_core::cid::Cid;
+use ipld_core::cid::{Cid, Version};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::ContentError;
@@ -66,9 +66,9 @@ const BLAKE3_DIGEST_LEN: usize = 32;
 /// major version bump**, never a patch — every previously emitted address would
 /// become unreachable. CIDs are self-describing, so a future hash/codec can
 /// ship as a *new* representation under a *new* major without retrofitting
-/// agility now; callers needing a different shape today can wrap a raw [`Cid`]
-/// via the [`From<Cid>`](#impl-From%3CCid%3E-for-ContentId) / [`as_cid`](Self::as_cid)
-/// seam.
+/// agility now. A raw [`Cid`] is admitted only if it matches this profile —
+/// [`TryFrom<Cid>`](#impl-TryFrom%3CCid%3E-for-ContentId) validates it — and the
+/// inner CID is readable via [`as_cid`](Self::as_cid).
 ///
 /// # Serde representation (FROZEN at 0.1.0)
 ///
@@ -333,12 +333,14 @@ impl ContentId {
     /// hash an adopter joins on across systems (the same digest a BLAKE3-native
     /// upstream would hand to [`from_blake3_content_digest`](Self::from_blake3_content_digest)).
     ///
-    /// The length is a **frozen invariant**: every `ContentId` carries exactly
-    /// `BLAKE3_DIGEST_LEN` (32) digest bytes (see the
+    /// The length is a **frozen, enforced invariant**: every `ContentId` carries
+    /// exactly `BLAKE3_DIGEST_LEN` (32) digest bytes (see the
     /// [CID-parameters contract](ContentId#cid-parameters-frozen-at-010)), so
     /// this accessor is infallible and returns a fixed-size array. The copy
-    /// (`try_into`) can never fail; the `expect` documents the invariant and is
-    /// unreachable for any id this crate mints.
+    /// (`try_into`) can never fail; the `expect` is unreachable for *any*
+    /// `ContentId` — every ingress path (`from_bytes`, `FromStr`, `TryFrom<Cid>`,
+    /// binary `Deserialize`) validates the profile, so an off-profile CID can never
+    /// become a `ContentId` and reach this method.
     ///
     /// Part of the **frozen presentation contract** — see the
     /// [presentation contract](ContentId#presentation-contract-frozen-at-010).
@@ -410,18 +412,69 @@ impl ContentId {
     ///
     /// Returns [`ContentError::InvalidCid`] if the bytes are not a valid CID.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ContentError> {
-        Cid::read_bytes(bytes)
-            .map(ContentId)
-            .map_err(|e| ContentError::InvalidCid {
-                reason: e.to_string(),
-                source: Box::new(e),
-            })
+        let cid = Cid::read_bytes(bytes).map_err(|e| ContentError::InvalidCid {
+            reason: e.to_string(),
+            source: Box::new(e),
+        })?;
+        validate_profile(&cid)?;
+        Ok(ContentId(cid))
     }
 }
 
-impl From<Cid> for ContentId {
-    fn from(cid: Cid) -> Self {
-        ContentId(cid)
+/// Reject any [`Cid`] that is not this crate's frozen profile: CIDv1 + dag-cbor
+/// (`0x71`) + BLAKE3 (`0x1e`) + a 32-byte digest.
+///
+/// **Every** ingress path — [`from_bytes`](ContentId::from_bytes), the
+/// [`FromStr`] impl, [`TryFrom<Cid>`], and the binary/IPLD [`Deserialize`] —
+/// routes through this, so a parsed / deserialized / converted `ContentId` carries
+/// the same invariant a *minted* one does. That is what makes the presentation
+/// accessors ([`digest_bytes`](ContentId::digest_bytes) etc.) total: a foreign CID
+/// (a CIDv0, a non-dag-cbor codec, a SHA-256 hash, a non-32-byte digest) can never
+/// become a `ContentId`, so it can never reach an accessor and panic.
+fn validate_profile(cid: &Cid) -> Result<(), ContentError> {
+    if cid.version() != Version::V1 {
+        return Err(ContentError::InvalidCidProfile {
+            reason: format!("expected CIDv1, got {:?}", cid.version()),
+        });
+    }
+    if cid.codec() != DAG_CBOR_CODEC {
+        return Err(ContentError::InvalidCidProfile {
+            reason: format!(
+                "expected dag-cbor codec 0x{DAG_CBOR_CODEC:x}, got 0x{:x}",
+                cid.codec()
+            ),
+        });
+    }
+    if cid.hash().code() != BLAKE3_HASH_CODE {
+        return Err(ContentError::InvalidCidProfile {
+            reason: format!(
+                "expected BLAKE3 multihash 0x{BLAKE3_HASH_CODE:x}, got 0x{:x}",
+                cid.hash().code()
+            ),
+        });
+    }
+    let digest_len = cid.hash().digest().len();
+    if digest_len != BLAKE3_DIGEST_LEN {
+        return Err(ContentError::InvalidCidProfile {
+            reason: format!("expected a {BLAKE3_DIGEST_LEN}-byte digest, got {digest_len} bytes"),
+        });
+    }
+    Ok(())
+}
+
+impl TryFrom<Cid> for ContentId {
+    type Error = ContentError;
+
+    /// Wrap a [`Cid`] **iff** it is this crate's frozen profile; a foreign CID is
+    /// rejected with [`ContentError::InvalidCidProfile`].
+    ///
+    /// This is `TryFrom`, not `From`, on purpose: an infallible `From<Cid>` would
+    /// let an off-profile CID become a `ContentId` and later panic in a
+    /// presentation accessor. (The outward [`From<ContentId>`] for [`Cid`] stays
+    /// infallible — dropping the newtype is always safe.)
+    fn try_from(cid: Cid) -> Result<Self, Self::Error> {
+        validate_profile(&cid)?;
+        Ok(ContentId(cid))
     }
 }
 
@@ -463,12 +516,12 @@ impl FromStr for ContentId {
     /// breaking the frozen base32-lower round-trip — so do not depend on parsing
     /// non-base32 CID strings.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Cid::from_str(s)
-            .map(ContentId)
-            .map_err(|e| ContentError::InvalidCid {
-                reason: e.to_string(),
-                source: Box::new(e),
-            })
+        let cid = Cid::from_str(s).map_err(|e| ContentError::InvalidCid {
+            reason: e.to_string(),
+            source: Box::new(e),
+        })?;
+        validate_profile(&cid)?;
+        Ok(ContentId(cid))
     }
 }
 
@@ -502,7 +555,11 @@ impl<'de> Deserialize<'de> for ContentId {
             s.parse::<ContentId>()
                 .map_err(<D::Error as serde::de::Error>::custom)
         } else {
-            Cid::deserialize(deserializer).map(ContentId)
+            // Binary/IPLD: a decoded tag-42 link is an arbitrary CID until proven
+            // on-profile — reject a foreign link here, not later in an accessor.
+            let cid = Cid::deserialize(deserializer)?;
+            validate_profile(&cid).map_err(<D::Error as serde::de::Error>::custom)?;
+            Ok(ContentId(cid))
         }
     }
 }
@@ -964,5 +1021,113 @@ mod checked_input_tests {
             "minting over non-canonical bytes names a different id than the \
              canonical form would — exactly the hazard from_canonical_bytes warns of"
         );
+    }
+}
+
+#[cfg(test)]
+mod profile_validation_tests {
+    //! Every ingress path (`from_bytes`, `FromStr`, `TryFrom<Cid>`, binary
+    //! `Deserialize`) admits ONLY the frozen profile — CIDv1 + dag-cbor (`0x71`) +
+    //! BLAKE3 (`0x1e`) + 32-byte digest. A foreign CID is rejected with
+    //! [`ContentError::InvalidCidProfile`] rather than smuggled in to panic later in
+    //! a presentation accessor. (Closes the ContentId profile-validation hole.)
+    use super::*;
+    use ipld_core::cid::multihash::Multihash;
+    use ipld_core::cid::Cid;
+
+    const SHA2_256: u64 = 0x12;
+    const RAW_CODEC: u64 = 0x55;
+
+    fn blake3_mh(digest: &[u8]) -> Multihash<64> {
+        Multihash::wrap(BLAKE3_HASH_CODE, digest).expect("wrap blake3")
+    }
+
+    // Well-formed CIDs that are NOT this crate's profile, one per parameter.
+    fn cidv0_sha256() -> Cid {
+        Cid::new_v0(Multihash::wrap(SHA2_256, &[7u8; 32]).expect("wrap sha256")).expect("v0")
+    }
+    fn v1_non_dagcbor_codec() -> Cid {
+        Cid::new_v1(RAW_CODEC, blake3_mh(&[7u8; 32]))
+    }
+    fn v1_sha256_hash() -> Cid {
+        Cid::new_v1(
+            DAG_CBOR_CODEC,
+            Multihash::wrap(SHA2_256, &[7u8; 32]).expect("wrap sha256"),
+        )
+    }
+    fn v1_short_digest() -> Cid {
+        Cid::new_v1(DAG_CBOR_CODEC, blake3_mh(&[7u8; 16]))
+    }
+
+    /// A foreign CID is rejected identically by TryFrom, from_bytes, and FromStr.
+    fn assert_all_ingress_reject(cid: Cid) {
+        assert!(
+            matches!(
+                ContentId::try_from(cid),
+                Err(ContentError::InvalidCidProfile { .. })
+            ),
+            "TryFrom<Cid> must reject a foreign CID"
+        );
+        assert!(
+            matches!(
+                ContentId::from_bytes(&cid.to_bytes()),
+                Err(ContentError::InvalidCidProfile { .. })
+            ),
+            "from_bytes must reject a foreign CID envelope"
+        );
+        assert!(
+            matches!(
+                cid.to_string().parse::<ContentId>(),
+                Err(ContentError::InvalidCidProfile { .. })
+            ),
+            "FromStr must reject a foreign CID string"
+        );
+    }
+
+    #[test]
+    fn cidv0_sha256_is_rejected() {
+        assert_all_ingress_reject(cidv0_sha256());
+    }
+
+    #[test]
+    fn v1_non_dagcbor_codec_is_rejected() {
+        assert_all_ingress_reject(v1_non_dagcbor_codec());
+    }
+
+    #[test]
+    fn v1_sha256_hash_is_rejected() {
+        assert_all_ingress_reject(v1_sha256_hash());
+    }
+
+    #[test]
+    fn v1_short_digest_is_rejected() {
+        assert_all_ingress_reject(v1_short_digest());
+    }
+
+    #[test]
+    fn a_foreign_cid_link_in_dagcbor_is_rejected_on_deserialize() {
+        // A tag-42 link to a foreign (sha256) CID, encoded as dag-cbor, must NOT
+        // deserialize as a ContentId through the binary/IPLD path.
+        let foreign = v1_sha256_hash();
+        let bytes = serde_ipld_dagcbor::to_vec(&foreign).expect("encode a tag-42 link");
+        let decoded: Result<ContentId, _> = serde_ipld_dagcbor::from_slice(&bytes);
+        assert!(
+            decoded.is_err(),
+            "a foreign CID link must not deserialize as a ContentId"
+        );
+    }
+
+    #[test]
+    fn an_on_profile_id_passes_every_ingress_path() {
+        // A genuine, minted id round-trips through all validated ingress paths.
+        let id = ContentId::from_canonical_bytes(&[0xa0]); // canonical empty map
+        assert_eq!(ContentId::try_from(*id.as_cid()).expect("try_from"), id);
+        assert_eq!(
+            ContentId::from_bytes(&id.to_bytes()).expect("from_bytes"),
+            id
+        );
+        assert_eq!(id.to_string().parse::<ContentId>().expect("parse"), id);
+        // And the presentation accessor is now provably total.
+        assert_eq!(id.digest_bytes().len(), BLAKE3_DIGEST_LEN);
     }
 }
