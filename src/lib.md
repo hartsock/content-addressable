@@ -98,8 +98,8 @@ surface is exactly:
   `merkle` feature is enabled; its bytes are not yet frozen (see [`merkle`]).
 
 The default-off, experimental **`store`** feature adds a further set of
-re-exports (`NodeStore`, `NodeStoreExt`, `MemoryStore`, `StoreError` — see
-[`store`]). Like `MerkleNode`, these are **not part of the frozen `0.1.0`
+re-exports (`NodeStore`, `NodeStoreExt`, `MemoryStore`, `VerifiedStore`,
+`AddressedBytes`, `StoreError`, `StoreOperation` — see [`store`]). Like `MerkleNode`, these are **not part of the frozen `0.1.0`
 surface**: the seam's trait API may change until the catalog stabilizes, so
 it is enumerated here for completeness but explicitly excluded from the
 stability contract above.

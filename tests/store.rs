@@ -9,7 +9,7 @@
 #![cfg(feature = "store")]
 
 use content_addressable::store::{
-    MemoryStore, NodeStore, NodeStoreExt, StoreError, StoreOperation,
+    AddressedBytes, MemoryStore, NodeStore, NodeStoreExt, StoreError, StoreOperation, VerifiedStore,
 };
 use content_addressable::{canonical, ContentAddressable, ContentError, ContentId};
 
@@ -77,7 +77,7 @@ impl NodeStore for DroppingStore {
     fn get_unverified(&self, id: &ContentId) -> Result<Vec<u8>, StoreError> {
         Err(StoreError::NotFound(*id))
     }
-    fn insert(&mut self, _id: ContentId, _bytes: &[u8]) -> Result<(), StoreError> {
+    fn insert(&mut self, _item: AddressedBytes<'_>) -> Result<(), StoreError> {
         Ok(())
     }
 }
@@ -174,16 +174,14 @@ fn get_node_rejects_a_lossy_decode_that_decode_verified_bytes_would_admit() {
         "the decoded value's own CID differs from the id it was read under"
     );
 
-    // Strict door: `get_node` re-encodes and rejects the identity mismatch.
+    // Strict door: `get_node` re-encodes and rejects the identity mismatch with the
+    // dedicated `RepresentationMismatch` (exact byte inequality, not a CID compare).
     let err = store
         .get_node::<OnlyAlpha>(&id)
         .expect_err("a lossy round-trip must be rejected by the identity-preserving read");
     assert!(
-        matches!(
-            err,
-            StoreError::Content(ContentError::VerificationFailed { .. })
-        ),
-        "get_node must reject a value that re-encodes to a different CID, got {err:?}"
+        matches!(err, StoreError::RepresentationMismatch { id: got } if got == id),
+        "get_node must reject a lossy re-encode with RepresentationMismatch, got {err:?}"
     );
 }
 
@@ -225,7 +223,7 @@ impl NodeStore for SubstitutingStore {
     fn get_unverified(&self, _id: &ContentId) -> Result<Vec<u8>, StoreError> {
         Ok(self.wrong_bytes.clone())
     }
-    fn insert(&mut self, _id: ContentId, _bytes: &[u8]) -> Result<(), StoreError> {
+    fn insert(&mut self, _item: AddressedBytes<'_>) -> Result<(), StoreError> {
         Ok(())
     }
 }
@@ -242,8 +240,8 @@ impl NodeStore for CorruptingStore {
         *bytes.last_mut().expect("stored nodes are non-empty") ^= 0x01;
         Ok(bytes)
     }
-    fn insert(&mut self, id: ContentId, bytes: &[u8]) -> Result<(), StoreError> {
-        self.inner.insert(id, bytes)
+    fn insert(&mut self, item: AddressedBytes<'_>) -> Result<(), StoreError> {
+        self.inner.insert(item)
     }
 }
 
@@ -357,30 +355,90 @@ fn put_is_idempotent_and_grow_only() {
 }
 
 #[test]
-fn insert_of_divergent_bytes_under_a_live_id_fails_closed() {
-    // PO-STORE-3 fail-closed (review finding #5): an occupied id asked to hold
-    // DIFFERENT bytes is a Collision that leaves state untouched — so the grow-only
-    // law does not lean on hash injectivity. (Reached by handing `insert` a
-    // mismatched (id, bytes); in the wild it takes a real BLAKE3 collision.)
+fn a_mismatched_insert_is_unrepresentable_and_repeat_writes_are_idempotent() {
+    // Review finding P1-B (vacant poisoning) is closed BY CONSTRUCTION: `insert`
+    // takes an unforgeable `AddressedBytes`, whose `(id, bytes)` are always
+    // consistent (its constructor is crate-internal and DERIVES the id). External
+    // code cannot build a mismatched pair, so a vacant slot can never be poisoned
+    // with bytes that do not derive their key — the old `store.insert(id, &hostile)`
+    // attack does not typecheck. (See `tests/compile_fail/` note in the PR body.)
+    //
+    // What remains testable through the public API is that the ONLY write path,
+    // `put`, files consistent pairs and is idempotent / grow-only.
     let mut store = MemoryStore::new();
     let a = canonical_map(1);
     let id = store.put(&a).expect("put A");
-    let b = canonical_map(2);
-    assert_ne!(a, b);
+    assert_eq!(
+        id,
+        ContentId::from_canonical_bytes(&a),
+        "put files under the derived id"
+    );
+    // Re-putting the same bytes is idempotent; a different value gets its own id.
+    store.put(&a).expect("idempotent re-put");
+    let other = store.put(&canonical_map(2)).expect("put B");
+    assert_ne!(other, id);
+    assert_eq!(store.len(), 2, "grow-only: two distinct nodes");
+    assert_eq!(store.get(&id).expect("A resolves"), a);
+}
 
-    let err = store
-        .insert(id, &b)
-        .expect_err("divergent bytes under a live id must fail closed");
-    match err {
-        StoreError::Collision { id: contested } => assert_eq!(contested, id),
-        other => panic!("expected Collision, got {other:?}"),
+/// A hostile backend that defines an INHERENT `get` skipping verification, and
+/// serves attacker-chosen bytes for its raw fetch — the review's P1-A escape hatch.
+struct ShadowingStore {
+    served: Vec<u8>,
+}
+
+impl ShadowingStore {
+    /// Inherent `get` — wins normal method resolution over `NodeStoreExt::get`,
+    /// and does NOT verify. This is the bypass the facade/UFCS must defeat.
+    fn get(&self, _id: &ContentId) -> Result<Vec<u8>, StoreError> {
+        Ok(self.served.clone())
     }
-    // State untouched: A still resolves; the count did not grow.
-    assert_eq!(store.get(&id).expect("A still present"), a);
-    assert_eq!(store.len(), 1);
-    // Equal reinsertion remains an idempotent success.
-    store.insert(id, &a).expect("equal reinsert is idempotent");
-    assert_eq!(store.len(), 1);
+}
+
+impl NodeStore for ShadowingStore {
+    fn get_unverified(&self, _id: &ContentId) -> Result<Vec<u8>, StoreError> {
+        Ok(self.served.clone())
+    }
+    fn insert(&mut self, _item: AddressedBytes<'_>) -> Result<(), StoreError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn verified_store_defeats_inherent_method_shadowing() {
+    // Review finding P1-A: `store.get(&id)` on a concrete type resolves to an
+    // INHERENT `get` if one exists — bypassing verification. Document the hazard,
+    // then show the two defenses: `VerifiedStore` and UFCS both invoke the sealed
+    // trait method, which rejects the substituted bytes.
+    let honest = canonical_map(1);
+    let id = ContentId::from_canonical_bytes(&honest);
+    let hostile = canonical_map(2);
+    assert_ne!(honest, hostile);
+    let store = ShadowingStore { served: hostile };
+
+    // The hazard: the inherent method returns the WRONG bytes, unverified.
+    assert_eq!(store.get(&id).expect("inherent get"), canonical_map(2));
+
+    // Defense 1 — the facade dispatches to the sealed trait method (verified).
+    let verified = VerifiedStore::new(ShadowingStore {
+        served: canonical_map(2),
+    });
+    assert!(
+        matches!(
+            verified.get(&id),
+            Err(StoreError::Content(ContentError::VerificationFailed { .. }))
+        ),
+        "VerifiedStore::get must verify and reject the substituted bytes"
+    );
+
+    // Defense 2 — UFCS names the trait method explicitly (verified).
+    assert!(
+        matches!(
+            NodeStoreExt::get(&store, &id),
+            Err(StoreError::Content(ContentError::VerificationFailed { .. }))
+        ),
+        "NodeStoreExt::get (UFCS) must verify and reject the substituted bytes"
+    );
 }
 
 #[test]

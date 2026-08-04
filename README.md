@@ -305,9 +305,11 @@ proves `merkle` stays off by default).
 A default-**off** cargo feature, `store`, gates `src/store.rs`: the narrow seam
 every Merkle-catalog structure (epic #30) traverses. Backends implement only a
 raw fetch + put (`NodeStore`); the **verified** operations live in
-`NodeStoreExt`, a blanket-implemented extension trait sealed by coherence, so
-no backend can opt out of verify-on-read — a tampered or substituted node
-surfaces as `VerificationFailed`, never as wrong bytes:
+`NodeStoreExt`, a blanket-implemented extension trait sealed by coherence, so a
+backend cannot *re-implement* verify-on-read — a tampered or substituted node
+read through the trait method surfaces as `VerificationFailed`, never as wrong
+bytes. (Because Rust prefers inherent methods, hold a `VerifiedStore` or call via
+UFCS where a backend's own inherent `get` must not intercept the call.)
 
 ```rust
 use content_addressable::store::{MemoryStore, NodeStoreExt as _};
