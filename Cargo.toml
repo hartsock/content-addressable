@@ -36,7 +36,7 @@ categories = ["cryptography", "data-structures", "encoding"]
 # (`src/merkle.rs`, `MerkleNode<T>`). Default-OFF: a plain `cargo build` /
 # `cargo test` does NOT compile it, so no new symbols leak into the default
 # surface. Its serialized bytes are NON-FROZEN until Merkle conformance vectors
-# land (a follow-up toward 0.1.0-rc1) — see the module docs. CI and the pre-push
+# land (a later 0.1.x release) — see the module docs. CI and the pre-push
 # hook exercise it via `--all-features`.
 unstable-merkle = []
 # `unstable-store` gates the experimental CID-addressed node-store seam (`src/store.rs`):

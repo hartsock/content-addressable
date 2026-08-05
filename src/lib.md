@@ -49,8 +49,8 @@ assert!(r.verify(&id).unwrap());
 
 ## Stability
 
-This is `0.1.0-alpha.1`, working toward `0.1.0`. Most items of the byte/wire
-"must-fix gate" are now **frozen** — a stability contract across the `0.1.x`
+This is `0.1.0`, the first release to freeze the core contract. The byte/wire
+"must-fix gate" items are **frozen** — a stability contract across the `0.1.x`
 line, where changing them is a major version bump:
 
 - The [`ContentId`] serde representation (binary dag-cbor tag-42 link +

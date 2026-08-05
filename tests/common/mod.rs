@@ -16,10 +16,10 @@
 //! `{"$bytes": "<hex>"}` that *both* loaders (this one and the Python one)
 //! expand into a real byte string. Non-integer floats are deliberately excluded
 //! (JSON float ambiguity + dag-cbor float rules make them a separate concern),
-//! as are `Link`/`ContentId` values (their serde representation is not frozen
-//! during `0.1.0-alpha`). Those language-specific cases stay in the per-language
-//! suites; this shared file pins only the currently-stable, cross-language
-//! subset.
+//! as are `Link`/`ContentId` values — the shared JSON vector format carries no
+//! native CID type, so the frozen `ContentId` serde repr is exercised in the
+//! per-language suites instead. This shared file pins only the cross-language
+//! subset the JSON format can faithfully carry.
 
 #![allow(dead_code)]
 

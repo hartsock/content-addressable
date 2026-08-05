@@ -108,11 +108,12 @@ artifacts reach a registry.
 
 ## Classifiers & maturity
 
-`pyproject.toml` declares `Development Status :: 3 - Alpha`, matching the current
-alpha version. Advance this **deliberately**: move to `4 - Beta` / `5 -
-Production/Stable` only when the frozen `0.1.x` contract has shipped and there is
-real evidence for the claim. Do not label the package Production/Stable to make a
-release "look finished".
+`pyproject.toml` declares `Development Status :: 4 - Beta` for the first
+frozen-contract release (`0.1.0`): the core is locked for `0.1.x`, while the
+optional `unstable-*` features are still moving — Beta, not Production/Stable.
+Advance to `5 - Production/Stable` only when there is real evidence for the
+claim (a stable track record, the catalog frozen). Do not label the package
+Production/Stable to make a release "look finished".
 
 ## One-time maintainer setup
 

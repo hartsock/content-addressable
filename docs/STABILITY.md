@@ -2,8 +2,8 @@
 
 What is **frozen** for the `0.1.x` line, and what is not. A frozen contract is a
 stability guarantee: changing any of these is a **breaking release outside `0.1.x`**. The
-package is `0.1.0-alpha.1` — alpha *as a package* — but the contracts below are
-already locked, so downstream systems can persist and link against them today.
+package is `0.1.0` — the first release to freeze these contracts, so downstream
+systems can persist and link against them today.
 
 Issue links (`#N`) provide provenance; the contract itself is stated so you do
 not need to open every issue to depend on it.

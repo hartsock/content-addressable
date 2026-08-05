@@ -28,10 +28,11 @@ computes for the same canonical IPLD value.
 
 ## Status & stability
 
-The package is **`0.1.0-alpha.1`**. "The package is alpha" and "specific core
-contracts are frozen" are both true and not in tension: the core byte/wire and
-API contracts are locked for the whole `0.1.x` line, while the optional features
-are still moving.
+The package is **`0.1.0`** — the first release that freezes the core contract.
+The core byte/wire and API contracts are locked for the whole `0.1.x` line
+(changing any is a breaking release outside `0.1.x`), while the optional
+`unstable-merkle` / `unstable-store` features are explicitly still moving and are
+named to say so.
 
 | Surface | Default | Stability |
 |---------|:-------:|-----------|
@@ -48,15 +49,15 @@ Rust:
 
 ```toml
 [dependencies]
-content-addressable = "0.1.0-alpha.1"
+content-addressable = "0.1.0"
 ```
 
 With the optional (default-off) features:
 
 ```toml
-content-addressable = { version = "0.1.0-alpha.1", features = ["unstable-merkle"] }
-content-addressable = { version = "0.1.0-alpha.1", features = ["unstable-store"] }
-content-addressable = { version = "0.1.0-alpha.1", features = ["unstable-merkle", "unstable-store"] }
+content-addressable = { version = "0.1.0", features = ["unstable-merkle"] }
+content-addressable = { version = "0.1.0", features = ["unstable-store"] }
+content-addressable = { version = "0.1.0", features = ["unstable-merkle", "unstable-store"] }
 ```
 
 Python:
