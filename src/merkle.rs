@@ -29,7 +29,7 @@
 //!
 //! Unlike the frozen [`ContentId`] / [`canonical`] surface,
 //! **a [`MerkleNode`]'s exact serialized bytes are NOT frozen.** This module is
-//! gated behind the experimental, default-**off** `merkle` cargo feature, and
+//! gated behind the experimental, default-**off** `unstable-merkle` cargo feature, and
 //! its byte layout is pinned only once Merkle conformance vectors land (a
 //! follow-up toward `0.1.0-rc1`). The node's bytes depend on two things that are
 //! not yet jointly frozen:

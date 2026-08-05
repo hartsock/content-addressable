@@ -32,22 +32,22 @@ keywords = ["content-addressing", "ipld", "cid", "merkle", "blake3"]
 categories = ["cryptography", "data-structures", "encoding"]
 
 [features]
-# `merkle` gates the experimental content-addressed Merkle-DAG node helper
+# `unstable-merkle` gates the experimental content-addressed Merkle-DAG node helper
 # (`src/merkle.rs`, `MerkleNode<T>`). Default-OFF: a plain `cargo build` /
 # `cargo test` does NOT compile it, so no new symbols leak into the default
 # surface. Its serialized bytes are NON-FROZEN until Merkle conformance vectors
 # land (a follow-up toward 0.1.0-rc1) — see the module docs. CI and the pre-push
 # hook exercise it via `--all-features`.
-merkle = []
-# `store` gates the experimental CID-addressed node-store seam (`src/store.rs`):
+unstable-merkle = []
+# `unstable-store` gates the experimental CID-addressed node-store seam (`src/store.rs`):
 # the `NodeStore`/`NodeStoreExt` traits + the `MemoryStore` reference backend
 # that every Merkle-catalog structure traverses (epic #30, issue #31).
-# Default-OFF, same posture as `merkle`: a plain `cargo build` / `cargo test`
+# Default-OFF, same posture as `unstable-merkle`: a plain `cargo build` / `cargo test`
 # does NOT compile it, and its trait API is NON-FROZEN until the catalog
 # stabilizes. It defines no wire bytes of its own (it stores bytes whose layout
 # is owned elsewhere), so it adds nothing to tests/vectors.json.
 # CI and the pre-push hook exercise it via `--all-features`.
-store = []
+unstable-store = []
 
 [dependencies]
 # ipld-core re-exports the `cid` crate (as ipld_core::cid) which in turn

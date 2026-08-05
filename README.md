@@ -37,8 +37,8 @@ are still moving.
 |---------|:-------:|-----------|
 | `ContentId`, canonical encoding, core errors, presentation, MSRV | Yes | **Frozen for `0.1.x`** — changing any is a breaking release outside `0.1.x` |
 | Python core parity | Separate package | Same core byte profile |
-| `merkle` feature | No | **Experimental** — serialized node bytes NOT frozen |
-| `store` feature | No | **Experimental** — trait/API surface NOT frozen (no new wire format of its own) |
+| `unstable-merkle` feature | No | **Experimental** — serialized node bytes NOT frozen |
+| `unstable-store` feature | No | **Experimental** — trait/API surface NOT frozen (no new wire format of its own) |
 
 Details and rationale: [`docs/STABILITY.md`](docs/STABILITY.md).
 
@@ -54,9 +54,9 @@ content-addressable = "0.1.0-alpha.1"
 With the optional (default-off) features:
 
 ```toml
-content-addressable = { version = "0.1.0-alpha.1", features = ["merkle"] }
-content-addressable = { version = "0.1.0-alpha.1", features = ["store"] }
-content-addressable = { version = "0.1.0-alpha.1", features = ["merkle", "store"] }
+content-addressable = { version = "0.1.0-alpha.1", features = ["unstable-merkle"] }
+content-addressable = { version = "0.1.0-alpha.1", features = ["unstable-store"] }
+content-addressable = { version = "0.1.0-alpha.1", features = ["unstable-merkle", "unstable-store"] }
 ```
 
 Python:
@@ -178,7 +178,7 @@ frozen and tested. Full CID bytes can be hex-encoded by a caller directly
 ## Experimental features
 
 Both features are **default-off** and exercised in CI via `--all-features`. Do
-not depend on the `merkle` node bytes yet.
+not depend on the `unstable-merkle` node bytes yet.
 
 ### `merkle` — content-addressed DAG nodes
 
@@ -190,7 +190,7 @@ produce equal bytes regardless of insertion order, and each parent serializes as
 a real DAG-CBOR tag-42 link.
 
 ```rust
-use content_addressable::merkle::MerkleNode; // feature = "merkle"
+use content_addressable::merkle::MerkleNode; // feature = "unstable-merkle"
 
 let root = MerkleNode::genesis("hello");
 let root_id = root.id()?;
