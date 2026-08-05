@@ -29,9 +29,9 @@
 //!
 //! Unlike the frozen [`ContentId`] / [`canonical`] surface,
 //! **a [`MerkleNode`]'s exact serialized bytes are NOT frozen.** This module is
-//! gated behind the experimental, default-**off** `merkle` cargo feature, and
+//! gated behind the experimental, default-**off** `unstable-merkle` cargo feature, and
 //! its byte layout is pinned only once Merkle conformance vectors land (a
-//! follow-up toward `0.1.0-rc1`). The node's bytes depend on two things that are
+//! later 0.1.x release). The node's bytes depend on two things that are
 //! not yet jointly frozen:
 //!
 //! 1. **The [`ContentId`] tag-42 serde representation** — README must-fix gate
@@ -99,7 +99,7 @@ use crate::trait_def::ContentAddressable;
 /// [module docs](self#-bytes-are-non-frozen-experimental-default-off-feature).
 /// They depend on (a) the [`ContentId`] tag-42 serde repr (must-fix gate item 1)
 /// and (b) the `payload` / `parents` field key strings. A follow-up "Merkle
-/// conformance vectors" issue freezes them for `0.1.0-rc1`; until then they may
+/// conformance vectors" issue freezes them in a later 0.1.x release; until then they may
 /// change without it being a breaking change.
 ///
 /// # Examples

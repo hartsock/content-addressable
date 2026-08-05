@@ -8,7 +8,7 @@
 # targeting this manifest explicitly (see ../pyproject.toml `manifest-path`).
 [package]
 name = "content-addressable-py"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -21,6 +21,13 @@ publish = false
 # produced artifact name; maturin renames/installs it as `content_addressable`.
 name = "content_addressable"
 crate-type = ["cdylib"]
+# The lib name deliberately matches the core crate's lib (`content_addressable`)
+# so the installed Python import name is correct. That shadow makes rustdoc
+# refuse `cargo doc --workspace` ("same name ... same path"). This binding's
+# API is documented on the Python side, not via rustdoc, so exclude it as a doc
+# target: `cargo doc --workspace` then documents only the core crate. Does not
+# affect maturin, clippy, or `cargo test --workspace`.
+doc = false
 
 [dependencies]
 # The core crate, by path. The core's own Cargo.toml gains NO PyO3 dependency.

@@ -49,8 +49,8 @@ assert!(r.verify(&id).unwrap());
 
 ## Stability
 
-This is `0.1.0-alpha.1`, working toward `0.1.0`. Most items of the byte/wire
-"must-fix gate" are now **frozen** — a stability contract across the `0.1.x`
+This is `0.1.0`, the first release to freeze the core contract. The byte/wire
+"must-fix gate" items are **frozen** — a stability contract across the `0.1.x`
 line, where changing them is a major version bump:
 
 - The [`ContentId`] serde representation (binary dag-cbor tag-42 link +
@@ -95,9 +95,9 @@ surface is exactly:
   etc., **not** re-exported at the root (one name per function, matching the
   doctests above and the PyO3 face).
 - [`MerkleNode`] — re-exported **only** when the default-off, experimental
-  `merkle` feature is enabled; its bytes are not yet frozen (see [`merkle`]).
+  `unstable-merkle` feature is enabled; its bytes are not yet frozen (see [`merkle`]).
 
-The default-off, experimental **`store`** feature adds a further set of
+The default-off, experimental **`unstable-store`** feature adds a further set of
 re-exports (`NodeStore`, `NodeStoreExt`, `MemoryStore`, `VerifiedStore`,
 `AddressedBytes`, `StoreError`, `StoreOperation` — see [`store`]). Like `MerkleNode`, these are **not part of the frozen `0.1.0`
 surface**: the seam's trait API may change until the catalog stabilizes, so

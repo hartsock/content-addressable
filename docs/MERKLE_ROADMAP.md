@@ -90,12 +90,21 @@ Epic #17 freezes the identity layer (`ContentId` bytes, canonical dag-cbor, the 
 - Phases 3–4 start as core structures prove the seams. Invented structures (label `speculative`) may be re-scoped or closed on evidence — they are hypotheses, not commitments.
 - A structure's bytes freeze **only** when its vectors land in the Merkle-vectors gate. Until then its layout may change without a breaking-change ceremony.
 
-## Release ladder & audit cadence (approved 2026-07-21)
+## Release ladder & audit cadence (approved 2026-07-21; ladder re-mapped 2026-08 at 0.1.0)
 
 **Careful and deeply tested — audit passes are built into the process, not appended to it.**
 
-- **`0.0.1` → `0.0.99`**: micro-releases, one or a few catalog slices each, until the catalog is complete. The existing `0.1.0-alpha.1` on crates.io/PyPI is a prerelease, which resolvers ignore by default, so the `0.0.x` stable-channel line is the one adopters get. The byte-freeze work (#17) lands *during* this line.
-- **`0.1.0` = catalog complete**: every Phase 0–3 issue closed, vectors landed, Rust + Python parity green. (This re-maps #17's "0.1.0-rc1" label: `0.1.0` now names catalog-completeness, not just the byte freeze.)
+> **Superseded framing.** The "`0.1.0` = catalog complete" line below (and the
+> `0.0.x` micro-release channel it depended on) is **superseded**: `0.1.0`
+> shipped as the **frozen core contract**, not catalog-completeness. What
+> actually happened: `0.1.0-alpha.1` (prerelease) → `0.1.0` (frozen `ContentId`
+> byte/wire + API contract, Rust↔Python parity). The Merkle catalog rides the
+> `0.1.x` line as **experimental, default-off** `unstable-merkle` /
+> `unstable-store` features. The remaining ladder rungs (sister languages,
+> hardening, `1.0.0`) still apply.
+
+- **`0.1.0` = frozen core contract** (shipped): the `ContentId` byte/wire + API contract and Rust↔Python parity are frozen for the whole `0.1.x` line. The Merkle catalog ships behind the experimental, default-off `unstable-merkle` / `unstable-store` features whose bytes/API are explicitly *not* frozen.
+- **`0.1.x` catalog line**: each catalog slice lands behind the `unstable-*` features; a structure's bytes freeze **only** when its cross-language vectors land in the Merkle-vectors gate (#17). Catalog-completeness is a later milestone, **not** a `0.1.0` gate.
 - **`0.1.x` → `0.999.x`**: sister languages (TypeScript, Dart, Java — #35) plus hardening, until the fundamentals are fully baked and invariant.
 - **`1.0.0` = rock solid.** Nothing ships in 1.0.0 that hasn't survived the full audit cadence below.
 

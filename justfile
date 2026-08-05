@@ -9,18 +9,35 @@
 # Run the full local check suite: format, lint, test, doc, leaf guard.
 check: fmt clippy test doc leaf
 
+# Verify the three package version declarations agree (root Cargo.toml,
+# content-addressable-py/Cargo.toml, pyproject.toml) via the canonical tool. With
+# a tag it also asserts the tag is v<version>. This is the SINGLE source of the
+# SemVer<->PEP 440 mapping (no second copy in YAML/shell); the CI release gate
+# calls this same recipe. Kept out of `check` so a push never requires Python
+# (same posture as the CI-only `msrv`/`python` jobs — see the pre-push header).
+#   just verify-release            # drift guard: the three versions agree
+#   just verify-release v0.1.0     # release: also assert the tag matches
+verify-release tag="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{ tag }}" ]; then
+      python3 scripts/verify_release.py --tag "{{ tag }}"
+    else
+      python3 scripts/verify_release.py
+    fi
+
 # Verify formatting (does not modify files).
 fmt:
     cargo fmt -- --check
 
 # Lint with all warnings denied. `--all-features` compiles the default-OFF
-# `merkle` feature so its lints are checked too.
+# `unstable-merkle` feature so its lints are checked too.
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
 # Run all tests (unit + doctests). Plain `cargo test` includes doctests, which
 # `--all-targets` would skip. The `--all-features` pass exercises the default-OFF
-# `merkle` feature; the plain pass proves it stays off by default.
+# `unstable-merkle` feature; the plain pass proves it stays off by default.
 test:
     cargo test
     cargo test --all-features

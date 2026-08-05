@@ -2,8 +2,8 @@
 
 What is **frozen** for the `0.1.x` line, and what is not. A frozen contract is a
 stability guarantee: changing any of these is a **breaking release outside `0.1.x`**. The
-package is `0.1.0-alpha.1` — alpha *as a package* — but the contracts below are
-already locked, so downstream systems can persist and link against them today.
+package is `0.1.0` — the first release to freeze these contracts, so downstream
+systems can persist and link against them today.
 
 Issue links (`#N`) provide provenance; the contract itself is stated so you do
 not need to open every issue to depend on it.
@@ -103,8 +103,8 @@ The public crate-root re-export surface is frozen and minimal: `ContentId`,
 `canonical::to_canonical_dagcbor` etc., not re-exported at the root). The
 codec/hash codes `DAG_CBOR_CODEC` / `BLAKE3_HASH_CODE` are `pub` in `content_id`
 but deliberately **not** promoted to the crate root; `BLAKE3_DIGEST_LEN` is
-private. `MerkleNode` is re-exported only under the experimental `merkle` feature;
-the `store` surface only under the experimental `store` feature. Removing or
+private. `MerkleNode` is re-exported only under the experimental `unstable-merkle` feature;
+the `store` surface only under the experimental `unstable-store` feature. Removing or
 narrowing a frozen export after `0.1.0` is a breaking release outside `0.1.x`; *adding* one is allowed.
 
 ### MSRV & edition ([#9])
@@ -128,9 +128,9 @@ fixed for `0.1.x`.
 
 ## What is NOT frozen
 
-### The `merkle` feature — experimental node bytes
+### The `unstable-merkle` feature — experimental node bytes
 
-The default-off `merkle` feature ships `MerkleNode<T>` (a `payload: T` plus
+The default-off `unstable-merkle` feature ships `MerkleNode<T>` (a `payload: T` plus
 `parents: BTreeSet<ContentId>`, whose id derives from both). **Its serialized
 node bytes are not frozen.** The layout depends on (a) the `ContentId` tag-42
 serde repr and (b) the payload / parents field-key strings; it is pinned only
@@ -139,9 +139,9 @@ deliberately kept out of `tests/vectors.json` (the frozen cross-language
 byte-parity gate). Until then, changing the node bytes is **not** a breaking
 change. After `0.1.0` freezes them, it is a breaking release outside `0.1.x`.
 
-### The `store` feature — experimental API
+### The `unstable-store` feature — experimental API
 
-The default-off `store` feature ships the CID-addressed node store seam
+The default-off `unstable-store` feature ships the CID-addressed node store seam
 (`NodeStore`, `NodeStoreExt`, `VerifiedStore`, `MemoryStore`, `AddressedBytes`,
 `StoreError`, `StoreOperation`). **Its trait/API surface is not frozen** and may
 change until the catalog stabilizes. The seam defines **no new wire bytes of its

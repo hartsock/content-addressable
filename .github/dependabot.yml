@@ -1,0 +1,44 @@
+# Dependabot keeps SHA-pinned GitHub Actions current through reviewable PRs.
+#
+# Both .github/workflows/ci.yml and .github/workflows/release.yml pin every
+# third-party action to a full commit SHA (supply-chain hardening: a moving tag
+# like @v4 can be repointed at malicious code without changing the ref). SHA pins
+# are safe but they FREEZE — they never pick up upstream security fixes on their
+# own. This config lets Dependabot open a PR when a pinned action publishes a new
+# release, so a human reviews and merges the bump instead of it landing silently.
+#
+# `rebase-strategy: disabled` keeps Dependabot from force-pushing over a branch a
+# human may be reviewing. Grouping collapses the routine action bumps into one PR
+# per week so the release-sensitive workflows are reviewed together.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    rebase-strategy: "disabled"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    rebase-strategy: "disabled"
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    rebase-strategy: "disabled"
+    commit-message:
+      prefix: "chore(deps)"

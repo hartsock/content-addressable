@@ -17,9 +17,9 @@ pub mod error;
 pub mod trait_def;
 
 // --- Seams the catalog builds on (feature-gated infrastructure). ---
-#[cfg(feature = "merkle")]
+#[cfg(feature = "unstable-merkle")]
 pub mod merkle;
-#[cfg(feature = "store")]
+#[cfg(feature = "unstable-store")]
 pub mod store;
 
 // --- The catalog: ONE line. The sub-manifest owns the members. ---
@@ -33,9 +33,9 @@ pub mod structures;
 // Removing or narrowing an entry is a major version bump.
 pub use content_id::ContentId;
 pub use error::ContentError;
-#[cfg(feature = "merkle")]
+#[cfg(feature = "unstable-merkle")]
 pub use merkle::MerkleNode;
-#[cfg(feature = "store")]
+#[cfg(feature = "unstable-store")]
 pub use store::{
     AddressedBytes, MemoryStore, NodeStore, NodeStoreExt, StoreError, StoreOperation, VerifiedStore,
 };

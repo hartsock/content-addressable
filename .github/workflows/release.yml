@@ -1,142 +1,185 @@
 # ============================================================================
 # release.yml — tag-driven, multi-platform release for `content-addressable`.
 #
-# WHAT THIS DOES
-#   On a version tag (`v*`) it builds the full abi3 wheel matrix with
-#   PyO3/maturin-action, then publishes:
-#     - the wheels + sdist to PyPI via Trusted Publishing (OIDC — NO token), and
-#     - the CORE crate to crates.io via `cargo publish` (the py crate is
-#       `publish = false` and never goes to crates.io).
-#   It retires the deprecated, laptop-bound `maturin upload` path (issue #14).
+# DETERMINISTIC RELEASE GATE. Publication to crates.io OR PyPI cannot begin
+# until ONE common gate (`release-gate`) has proven every releasable condition:
 #
-# HOOK PARITY (read this before wondering why it's not in .githooks/pre-push)
-#   This workflow is *tag-triggered and publish-only*. It is NOT a push-gate:
-#   it never runs on `push`/`pull_request` to `main`, so it is NOT — and must
-#   not be — mirrored in .githooks/pre-push. That hook mirrors the CI *gate*
-#   (.github/workflows/ci.yml: fmt/clippy/test/doc/leaf). A release pipeline has
-#   nothing to enforce on every push; mirroring it would just slow pushes down
-#   and try to publish from a laptop, which is exactly what issue #14 retires.
-#   This is the same documented-exception pattern the `python` and `msrv` CI
-#   jobs already use (see the ci.yml / pre-push headers). Keeping it OUT of the
-#   hook is the correct, honest parity story — there is no gate here to mirror.
+#   provenance   version agreement (canonical tool) + tag == v<version> +
+#                the tagged commit is contained in the protected branch `main`
+#   rust-gate    just check + fmt/clippy/test/doc (workspace, --locked,
+#                --all-features) + `cargo publish --dry-run`
+#   msrv         build + test on the pinned Rust 1.85
+#   build-wheels abi3 wheels for every target (twine check + uploaded artifact)
+#   build-sdist  the source distribution (twine check + uploaded artifact)
+#   install-smoke installs the BUILT wheel into a clean venv on each
+#                OS x Python and runs the golden-vector + fail-closed tests
+#                against the INSTALLED package (not the checkout)
+#   sdist-smoke  installs the sdist (from source) and runs the same tests
 #
-# PRIOR ART
-#   The wheel matrix and abi3 conventions below are lifted from nessie-store,
-#   which already ships multi-platform abi3 wheels via PyO3/maturin-action
-#   (macOS universal2 / Linux x86_64 + aarch64 / Windows). Reused rather than
-#   reinvented (issue #14). Lessons carried over: abi3-py39 ⇒ ONE wheel per
-#   target (not per Python version); PyPI throttles *new project* names, so the
-#   PyPI and crates.io publishes are independent jobs and a partial failure of
-#   one can be re-run without redoing the other.
+# Both `publish-*` jobs `needs: [release-gate]` and consume the EXACT artifacts
+# those jobs built and validated — nothing is rebuilt inside a publish job.
 #
-# ----------------------------------------------------------------------------
-# ONE-TIME MAINTAINER SETUP (must be done before the first real `v*` tag)
+# SECURITY POSTURE
+#   - Top-level `permissions: {}`; each job opts into the least it needs.
+#   - Every third-party action is pinned to a full commit SHA (tag in a trailing
+#     comment). Dependabot (.github/dependabot.yml) refreshes the pins via PRs.
+#   - PyPI uses Trusted Publishing (OIDC, no token). crates.io uses a scoped
+#     token. Both publish jobs run in protected GitHub environments so a human
+#     gate sits in front of each irreversible publish.
 #
-#   1. PyPI Trusted Publisher (OIDC — no stored token). On PyPI, add a
-#      "pending publisher" (Account → Publishing) for project
-#      `content-addressable` with EXACTLY these values:
+# HOOK PARITY
+#   Tag-triggered and publish-only; never runs on push/PR, so it is intentionally
+#   NOT mirrored in .githooks/pre-push (same documented exception as ci.yml's
+#   `msrv`/`python` jobs). There is no per-push gate here to mirror.
 #
-#          PyPI Project Name:  content-addressable
-#          Owner:              hartsock
-#          Repository name:    content-addressable
-#          Workflow name:      release.yml
-#          Environment name:   pypi
-#
-#      The filename `release.yml` and the environment `pypi` are load-bearing —
-#      they must match the `publish-pypi` job below. Do NOT rename this file or
-#      the environment without updating the Trusted Publisher registration.
-#
-#   2. crates.io token. crates.io has no OIDC trusted publishing yet, so the
-#      core crate publishes with a token. Create a scoped token at
-#      https://crates.io/settings/tokens (scope: publish-update for
-#      `content-addressable`) and store it as the repository secret
-#      `CARGO_REGISTRY_TOKEN` (Settings → Secrets and variables → Actions).
-#
-#   3. (Recommended) Create a GitHub environment named `pypi` (Settings →
-#      Environments) and add required reviewers / a tag protection rule so a
-#      human gate sits in front of the irreversible PyPI publish.
-#
-# See RELEASING.md for the full runbook (version bump → tag → push).
+# See RELEASING.md for the full runbook and the one-time maintainer setup
+# (PyPI trusted publisher, crates.io token, the `pypi` and `crates-io`
+# environments, and branch/tag protection).
 # ============================================================================
 name: release
 
 on:
   push:
     tags:
-      - "v*" # e.g. v0.1.0-rc1, v0.1.0
-  # Manual dry run: builds the full wheel matrix + sdist and runs the
-  # non-publishing checks (twine check, cargo publish --dry-run) so the matrix
-  # can be validated WITHOUT touching either registry. The publish jobs below
-  # are gated on `github.event_name == 'push'`, so a workflow_dispatch run never
-  # publishes anything.
+      - "v*" # e.g. v0.1.0, v0.1.0-rc.1
+  # Manual dry run: runs the ENTIRE gate (the version/provenance checks relax to
+  # a no-tag drift check) and builds + install-tests wheels/sdist, but the
+  # publish jobs are gated on `github.event_name == 'push'`, so nothing is
+  # published.
   workflow_dispatch:
 
 permissions: {} # least privilege at the top; jobs opt into what they need.
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   # --------------------------------------------------------------------------
-  # verify — the version-drift seam. The repo carries TWO version strings that
-  # MUST stay in lockstep and MUST match the tag:
-  #     Cargo.toml      version = "0.1.0-rc1"   (SemVer, crates.io)
-  #     pyproject.toml  version = "0.1.0rc1"    (PEP 440, PyPI)
-  # This job derives the expected spellings from the tag and fails the whole
-  # release if either file disagrees. On workflow_dispatch (no tag) it is a
-  # no-op pass so dry runs aren't blocked. (AC: verify job.)
+  # provenance — the release-authorization seam. Proves (a) the three version
+  # declarations agree and the tag is v<version> (the canonical
+  # scripts/verify_release.py, via `just verify-release`), (b) the tag points at
+  # HEAD, and (c) HEAD is contained in the protected branch `origin/main`. A tag
+  # on an unmerged or detached commit fails here, before anything is built.
   # --------------------------------------------------------------------------
-  verify:
-    name: verify (tag ↔ Cargo.toml ↔ pyproject.toml)
+  provenance:
+    name: provenance (version + tag + branch containment)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - name: assert tag matches both version strings
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0 # full history for the ancestor check
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
+        with:
+          tool: just
+      - name: fetch the protected branch + tags
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --tags --force origin
+      - name: verify version agreement (and tag on a real release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            just verify-release "${GITHUB_REF_NAME}"
+          else
+            just verify-release
+          fi
+      - name: verify tag provenance (tag == HEAD, HEAD contained in main)
         if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"           # e.g. v0.1.0-rc1
-          ver="${tag#v}"                      # strip leading 'v' -> 0.1.0-rc1
-          # SemVer spelling (Cargo.toml) keeps the hyphen: 0.1.0-rc1.
-          semver="${ver}"
-          # PEP 440 spelling (pyproject.toml) drops the hyphen before the
-          # pre-release segment: 0.1.0-rc1 -> 0.1.0rc1, 0.1.0-alpha.1 ->
-          # 0.1.0alpha.1, etc. A plain release tag (0.1.0) is unchanged.
-          pep440="${ver/-/}"
-
-          cargo_ver="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
-          py_ver="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
-
-          echo "tag=${tag}"
-          echo "expected SemVer (Cargo.toml)   = ${semver}   actual = ${cargo_ver}"
-          echo "expected PEP 440 (pyproject)   = ${pep440}   actual = ${py_ver}"
-
-          fail=0
-          if [ "${cargo_ver}" != "${semver}" ]; then
-            echo "::error::Cargo.toml version '${cargo_ver}' != tag-derived SemVer '${semver}'"
-            fail=1
+          head="$(git rev-parse HEAD)"
+          tagged="$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [ "${tagged}" != "${head}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} points at ${tagged}, not the checked-out HEAD ${head}"
+            exit 1
           fi
-          if [ "${py_ver}" != "${pep440}" ]; then
-            echo "::error::pyproject.toml version '${py_ver}' != tag-derived PEP 440 '${pep440}'"
-            fail=1
+          if ! git merge-base --is-ancestor "${head}" origin/main; then
+            echo "::error::tagged commit ${head} is NOT contained in the protected branch origin/main (unmerged or detached). Refusing to release."
+            exit 1
           fi
-          exit "${fail}"
-      - name: dry-run note (no tag to verify)
-        if: github.event_name != 'push'
-        run: echo "workflow_dispatch dry run — skipping tag/version verification."
+          echo "provenance OK: ${GITHUB_REF_NAME} -> ${head} is contained in origin/main"
 
   # --------------------------------------------------------------------------
-  # build-wheels — abi3 wheels across the target matrix. abi3-py39 (set in
-  # content-addressable-py/Cargo.toml) means ONE cp39-abi3 wheel per target
-  # covers CPython >= 3.9, so the matrix is platform×arch, NOT
-  # platform×arch×python. Each wheel is uploaded as an artifact for the publish
-  # jobs to collect. (AC: maturin-action wheels for the four targets.)
+  # rust-gate — the canonical `just check` PLUS release-only supersets
+  # (workspace scope, --locked, --all-features) and the crate-publish dry run.
+  # A superset of the per-push CI gate: nothing publishable is exempt from it.
+  # --------------------------------------------------------------------------
+  rust-gate:
+    name: rust gate (just check + workspace/locked + publish dry-run)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # rev of master (2026-01)
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
+        with:
+          tool: just
+      - name: canonical gate (just check) + version drift guard
+        run: |
+          set -euo pipefail
+          just check
+          just verify-release
+      - name: release-only supersets (workspace + locked + all-features)
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --locked
+          cargo test --workspace --all-features --locked
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+      - name: cargo publish --dry-run (core crate, from the committed lockfile)
+        run: cargo publish -p content-addressable --locked --dry-run
+
+  # --------------------------------------------------------------------------
+  # msrv — build + test on the pinned MSRV (Rust 1.85). The declared floor must
+  # actually build and test, not merely be asserted in Cargo.toml.
+  # --------------------------------------------------------------------------
+  msrv:
+    name: MSRV (Rust 1.85)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # rev of master (2026-01)
+        with:
+          toolchain: "1.85"
+      - name: build + test on 1.85 (locked)
+        run: |
+          set -euo pipefail
+          cargo build --all-targets --all-features --locked
+          cargo test --all-features --locked
+
+  # --------------------------------------------------------------------------
+  # build-wheels — abi3 wheels across the target matrix. abi3-py39 means ONE
+  # cp39-abi3 wheel per target covers CPython >= 3.9. Gated behind provenance +
+  # rust-gate so a version/provenance/test failure stops the build.
   # --------------------------------------------------------------------------
   build-wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
-    needs: verify
+    needs: [provenance, rust-gate]
     runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -147,13 +190,9 @@ jobs:
             manylinux: auto
           - runner: ubuntu-latest
             target: aarch64
-            # aarch64 Linux is cross-built inside maturin-action's manylinux
-            # container (zig/cross), not on a native arm runner.
             args: --release --out dist --manifest-path content-addressable-py/Cargo.toml
             manylinux: auto
           - runner: macos-14
-            # universal2 = a single wheel carrying both x86_64 and arm64 macOS
-            # slices, covering Intel and Apple Silicon from one artifact.
             target: universal2-apple-darwin
             args: --release --out dist --manifest-path content-addressable-py/Cargo.toml --target universal2-apple-darwin
             manylinux: ""
@@ -162,129 +201,229 @@ jobs:
             args: --release --out dist --manifest-path content-addressable-py/Cargo.toml
             manylinux: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: build abi3 wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.platform.target }}
           args: ${{ matrix.platform.args }}
-          # `auto` on Linux selects a manylinux image; empty elsewhere.
           manylinux: ${{ matrix.platform.manylinux }}
-          # QEMU emulation for the cross (aarch64) Linux build when needed.
           sccache: "true"
       - name: twine check the wheels
         shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip twine
           twine check dist/*
       - name: upload wheel artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
           path: dist/*.whl
           if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # build-sdist — the source distribution, built once. PyPI needs an sdist so
-  # `pip install` can fall back to a from-source build on any platform/arch the
-  # wheel matrix doesn't cover.
+  # build-sdist — the source distribution (built once).
   # --------------------------------------------------------------------------
   build-sdist:
     name: sdist
-    needs: verify
+    needs: [provenance, rust-gate]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: build sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: sdist
           args: --out dist --manifest-path content-addressable-py/Cargo.toml
       - name: twine check the sdist
         shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip twine
           twine check dist/*
       - name: upload sdist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sdist
           path: dist/*.tar.gz
           if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # publish-pypi — Trusted Publishing (OIDC). NO password/token: GitHub mints a
-  # short-lived OIDC identity per run that PyPI trusts via the pending-publisher
-  # registration (owner/repo/workflow/environment above). Runs ONLY on a real
-  # tag push (never on workflow_dispatch). Independent of the crates.io job, so
-  # a PyPI rate-limit can be re-run without re-publishing the crate. (AC: OIDC,
-  # id-token: write, environment `pypi`, no token, push-gated.)
+  # install-smoke — the "prove the wheel, not the checkout" gate. For each
+  # OS x Python, download the platform's BUILT wheel, install it into a clean
+  # venv, prove the import resolves to site-packages (not the source tree), and
+  # run the golden-vector + fail-closed-parsing + README tests against the
+  # INSTALLED package. abi3 means one wheel serves 3.9..3.13 on that platform.
+  # --------------------------------------------------------------------------
+  install-smoke:
+    name: install-smoke (${{ matrix.artifact }} / py${{ matrix.python }})
+    needs: [build-wheels]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, artifact: wheels-ubuntu-latest-x86_64, python: "3.9" }
+          - { runner: ubuntu-latest, artifact: wheels-ubuntu-latest-x86_64, python: "3.12" }
+          - { runner: ubuntu-latest, artifact: wheels-ubuntu-latest-x86_64, python: "3.13" }
+          - { runner: ubuntu-24.04-arm, artifact: wheels-ubuntu-latest-aarch64, python: "3.12" }
+          - { runner: macos-14, artifact: wheels-macos-14-universal2-apple-darwin, python: "3.9" }
+          - { runner: macos-14, artifact: wheels-macos-14-universal2-apple-darwin, python: "3.12" }
+          - { runner: macos-14, artifact: wheels-macos-14-universal2-apple-darwin, python: "3.13" }
+          - { runner: windows-latest, artifact: wheels-windows-latest-x64, python: "3.9" }
+          - { runner: windows-latest, artifact: wheels-windows-latest-x64, python: "3.12" }
+          - { runner: windows-latest, artifact: wheels-windows-latest-x64, python: "3.13" }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+      - name: install the built wheel into a clean venv and smoke-test it
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          if [ -f .venv/bin/python ]; then VPY=.venv/bin/python; else VPY=.venv/Scripts/python; fi
+          "$VPY" -m pip install --upgrade pip
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          wheel="${wheels[0]:-}"
+          [ -n "${wheel}" ] || { echo "::error::no wheel found in dist/"; exit 1; }
+          echo "installing built wheel: ${wheel}"
+          "$VPY" -m pip install "${wheel}" pytest
+          # The import MUST resolve to the installed wheel, not the source tree.
+          "$VPY" -c "import content_addressable as m; assert 'site-packages' in m.__file__, m.__file__; print('installed from', m.__file__)"
+          "$VPY" -c "import content_addressable as m; cid = m.content_id({'name': 'alpha'}); assert str(cid).startswith('bafyr4i'); assert len(cid.digest_bytes()) == 32; assert m.ContentId.parse(str(cid)) == cid; print('smoke OK', cid)"
+          "$VPY" -m pytest tests/test_content_addressable.py tests/test_readme.py tests/test_profile_validation.py -q
+
+  # --------------------------------------------------------------------------
+  # sdist-smoke — install the sdist (which builds from source) and run the same
+  # golden + fail-closed tests, proving the source distribution is installable.
+  # --------------------------------------------------------------------------
+  sdist-smoke:
+    name: sdist install-smoke (build from source)
+    needs: [build-sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # rev of master (2026-01)
+        with:
+          toolchain: stable
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sdist
+          path: dist
+      - name: install the sdist (from source) and test it
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          shopt -s nullglob
+          sdists=(dist/*.tar.gz)
+          sdist="${sdists[0]:-}"
+          [ -n "${sdist}" ] || { echo "::error::no sdist found in dist/"; exit 1; }
+          echo "installing sdist (from source): ${sdist}"
+          .venv/bin/pip install "${sdist}" pytest
+          .venv/bin/python -c "import content_addressable as m; assert 'site-packages' in m.__file__, m.__file__; print('sdist installed from', m.__file__)"
+          .venv/bin/python -m pytest tests/test_content_addressable.py tests/test_profile_validation.py -q
+
+  # --------------------------------------------------------------------------
+  # release-gate — the SINGLE aggregator both publish jobs depend on. It passes
+  # only if every validation job above succeeded, so no publish can start until
+  # every releasable artifact has passed validation.
+  # --------------------------------------------------------------------------
+  release-gate:
+    name: release gate (all validation passed)
+    needs:
+      - provenance
+      - rust-gate
+      - msrv
+      - build-wheels
+      - build-sdist
+      - install-smoke
+      - sdist-smoke
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: gate summary
+        run: echo "release-gate PASSED — provenance, rust-gate, msrv, wheels, sdist, and install-smoke (wheel + sdist) all green. Publication may proceed."
+
+  # --------------------------------------------------------------------------
+  # publish-pypi — Trusted Publishing (OIDC, no token). Consumes the EXACT
+  # wheel + sdist artifacts built and install-tested above; does not rebuild.
   # --------------------------------------------------------------------------
   publish-pypi:
     name: publish to PyPI (Trusted Publishing)
     if: github.event_name == 'push'
-    needs: [build-wheels, build-sdist]
+    needs: [release-gate]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write # REQUIRED for OIDC Trusted Publishing. No secrets used.
+      id-token: write # OIDC Trusted Publishing. No secrets used.
     steps:
-      - name: download all wheel + sdist artifacts
-        uses: actions/download-artifact@v4
+      - name: download the exact validated wheels + sdist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          # Every wheels-* artifact plus the sdist; flattened into dist/.
           path: dist
-          merge-multiple: true
-      - name: list artifacts to publish
+          merge-multiple: true # every wheels-* + sdist, flattened into dist/
+      - name: list the artifacts to publish
         run: ls -la dist/
       - name: publish to PyPI
-        # No `password:` / `with: token:` — Trusted Publishing supplies the
-        # credential via the OIDC token minted by `id-token: write` above.
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
         with:
           packages-dir: dist/
 
   # --------------------------------------------------------------------------
-  # publish-crate — the CORE crate to crates.io. The py crate is
-  # `publish = false`, so `-p content-addressable` publishes the leaf core only
-  # and never the bindings. crates.io has no OIDC yet, so this uses the
-  # `CARGO_REGISTRY_TOKEN` secret. `--locked` is safe because Cargo.lock is
-  # COMMITTED for this crate (issue #9, gate item #10) — the build resolves to
-  # the pinned lockfile, not a fresh resolve. Runs ONLY on a real tag push;
-  # independent of the PyPI job. (AC: cargo publish core via token, py stays
-  # publish=false, independent job, push-gated.)
+  # publish-crate — the CORE crate to crates.io (the py crate is
+  # `publish = false`). `--locked` resolves to the committed lockfile that the
+  # rust-gate's --dry-run already validated. In the protected `crates-io`
+  # environment so a human gate precedes the irreversible publish.
   # --------------------------------------------------------------------------
   publish-crate:
     name: publish core crate to crates.io
     if: github.event_name == 'push'
-    needs: verify
+    needs: [release-gate]
     runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # rev of master (2026-01)
+        with:
+          toolchain: stable
       - name: cargo publish (core crate only)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p content-addressable --locked
 
   # --------------------------------------------------------------------------
-  # dry-run-checks — workflow_dispatch only. Proves the crate-publish path
-  # (`cargo publish --dry-run`) without touching crates.io, so the manual dry
-  # run exercises BOTH the wheel matrix (above, via twine check) AND the crate
-  # packaging before the first real tag. Never runs on a tag push.
+  # dry-run-summary — workflow_dispatch only. Confirms the whole gate ran
+  # without publishing.
   # --------------------------------------------------------------------------
-  dry-run-checks:
-    name: dry-run checks (no publish)
+  dry-run-summary:
+    name: dry-run summary (no publish)
     if: github.event_name == 'workflow_dispatch'
-    needs: [build-wheels, build-sdist]
+    needs: [release-gate]
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: cargo publish --dry-run (core crate)
-        run: cargo publish -p content-addressable --locked --dry-run
-      - name: summary
-        run: echo "Dry run complete — wheels + sdist built and checked; crate packaged. Nothing published."
+      - run: echo "Dry run complete — provenance, gate, msrv, wheels + sdist built, install-smoke (wheel + sdist) all passed. Nothing published."

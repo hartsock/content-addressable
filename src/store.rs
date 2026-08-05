@@ -99,7 +99,7 @@
 //!
 //! # ⚠️ EXPERIMENTAL — default-off feature, API NON-FROZEN
 //!
-//! This module is gated behind the default-**off** `store` cargo feature, and
+//! This module is gated behind the default-**off** `unstable-store` cargo feature, and
 //! its trait API is **NOT frozen**: signatures may change without a breaking-
 //! change ceremony until the catalog stabilizes (epic #30's release ladder).
 //! The seam defines **no new wire bytes of its own** — it stores bytes whose
@@ -138,7 +138,7 @@
 //! assert_eq!(back, record);
 //! ```
 //!
-//! With the `merkle` feature also enabled, a whole [`MerkleNode`] DAG is
+//! With the `unstable-merkle` feature also enabled, a whole [`MerkleNode`] DAG is
 //! reconstructible from its root id the same way — see `tests/store.rs` (the
 //! seam's whole test suite lives there, separated from source) for the
 //! traversal pattern and the laws' executable counterparts.

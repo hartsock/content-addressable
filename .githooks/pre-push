@@ -25,12 +25,12 @@ cargo fmt -- --check
 echo "==> cargo clippy --all-targets --all-features -- -D warnings"
 cargo clippy --all-targets --all-features -- -D warnings
 
-echo "==> cargo test (default features — proves the merkle feature stays off)"
+echo "==> cargo test (default features — proves the unstable-merkle feature stays off)"
 cargo test
 
-# --all-features compiles + tests the default-OFF `merkle` feature
+# --all-features compiles + tests the default-OFF `unstable-merkle` feature
 # (src/merkle.rs / MerkleNode), mirroring the CI `test` job.
-echo "==> cargo test --all-features (exercises the merkle feature)"
+echo "==> cargo test --all-features (exercises the unstable-merkle feature)"
 cargo test --all-features
 
 # Mirrors the CI `doc` job: `-D warnings` turns broken intra-doc links into a
