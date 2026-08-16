@@ -11,6 +11,11 @@
 //!   presentation forms (issue #6) are `str(id)` (base32-lower text),
 //!   `to_bytes()` (CID binary envelope), `digest_bytes()` (raw 32-byte BLAKE3
 //!   hash), and `digest_hex()` (bare-digest-hex).
+//! - [`RawContentId`] — the identity of an opaque byte string (the *raw*
+//!   profile: CIDv1 raw `0x55` + BLAKE3 `0x1e`), sibling to `ContentId` (the
+//!   dag-cbor profile) with the same presentation forms. The two never compare
+//!   equal, even on identical digests — the codec is part of the identity
+//!   (issue #84).
 //! - [`to_canonical_dagcbor`] / [`from_canonical_dagcbor`] — the canonical
 //!   dag-cbor codec, applied to native Python values.
 //! - [`content_id`] — `ContentId.from_canonical_bytes(to_canonical_dagcbor(x))`.
@@ -19,7 +24,9 @@
 //! done here is translating Python values to/from the serde data model (via
 //! `pythonize`) and mapping core errors to Python exceptions.
 
-use ::content_addressable::{canonical, ContentId as CoreContentId};
+use ::content_addressable::{
+    canonical, ContentId as CoreContentId, RawContentId as CoreRawContentId,
+};
 use ipld_core::ipld::Ipld;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -79,8 +86,27 @@ impl PyContentId {
     /// Raises `ValueError` if `digest` is not exactly 32 bytes. (Unlike the
     /// Rust core's `[u8; 32]` argument, a Python `bytes` carries no
     /// compile-time length guarantee, so the length is validated here.)
+    ///
+    /// DEPRECATED (issue #84): this stamps the dag-cbor codec on a digest it
+    /// cannot know came from dag-cbor. For a digest of opaque bytes use
+    /// `RawContentId.from_blake3_digest` (the honest profile); when the digest
+    /// is known to be over canonical dag-cbor, say so with
+    /// `ContentId.from_dag_cbor_digest`. Behavior is unchanged; it will be
+    /// removed in a future major version.
     #[staticmethod]
     fn from_blake3_content_digest(digest: &[u8]) -> PyResult<Self> {
+        Self::from_dag_cbor_digest(digest)
+    }
+
+    /// Wrap an already-computed 32-byte BLAKE3 digest **of canonical dag-cbor
+    /// bytes** as a `ContentId`, without hashing again. The name asserts the
+    /// precondition; a digest of anything else mints an id whose dag-cbor codec
+    /// is a lie — for opaque bytes use `RawContentId.from_blake3_digest`.
+    /// Byte-identical to the deprecated `from_blake3_content_digest`.
+    ///
+    /// Raises `ValueError` if `digest` is not exactly 32 bytes.
+    #[staticmethod]
+    fn from_dag_cbor_digest(digest: &[u8]) -> PyResult<Self> {
         let arr: [u8; 32] = digest.try_into().map_err(|_| {
             PyValueError::new_err(format!(
                 "BLAKE3 content digest must be exactly 32 bytes, got {}",
@@ -88,7 +114,7 @@ impl PyContentId {
             ))
         })?;
         Ok(PyContentId {
-            inner: CoreContentId::from_blake3_content_digest(arr),
+            inner: CoreContentId::from_dag_cbor_digest(arr),
         })
     }
 
@@ -165,6 +191,126 @@ impl PyContentId {
         // Hash the canonical CID bytes so equal ids hash equal, matching
         // __eq__. (CoreContentId is Hash, but its derive hashes the inner Cid;
         // hashing the stable byte form is equivalent and explicit.)
+        let mut hasher = DefaultHasher::new();
+        self.inner.to_bytes().hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// The identity of an opaque byte string: a CIDv1 with the `raw` codec (`0x55`)
+/// and a BLAKE3 multihash (`0x1e`) over the bytes themselves — the *raw*
+/// profile, sibling to `ContentId` (the dag-cbor profile).
+///
+/// Use it for files, chunks, binaries, payloads: anything whose identity is
+/// "these bytes", not "this value". `RawContentId.from_content(b)` hashes bytes
+/// you hold; `RawContentId.from_blake3_digest(d)` wraps a digest you already
+/// have (no re-hash) — byte-identical to kyln's raw CIDs and to any bare
+/// `blake3` digest of the same bytes.
+///
+/// The presentation forms are the same as `ContentId`'s: `str(id)` (base32-lower
+/// text), `to_bytes()` (CID envelope), `digest_bytes()` / `digest_hex()` (bare
+/// 32-byte digest). A `RawContentId` and a `ContentId` are **never equal**, even
+/// when their digests are identical: the codec is part of the identity (issue
+/// #84, law 6). Comparing one to the other is `False`, and each class's parsers
+/// reject the other's CIDs.
+#[pyclass(
+    module = "content_addressable",
+    name = "RawContentId",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+struct PyRawContentId {
+    inner: CoreRawContentId,
+}
+
+#[pymethods]
+impl PyRawContentId {
+    /// The identity of `content`: CIDv1(raw, BLAKE3(content)). Hashes the bytes.
+    #[staticmethod]
+    fn from_content(content: &[u8]) -> Self {
+        PyRawContentId {
+            inner: CoreRawContentId::from_content(content),
+        }
+    }
+
+    /// Wrap an already-computed 32-byte BLAKE3 digest of some content as a
+    /// `RawContentId`, without hashing again. The caller asserts the digest is
+    /// BLAKE3 over the content they mean; verify with `verify(content)` when
+    /// the bytes are available.
+    ///
+    /// Raises `ValueError` if `digest` is not exactly 32 bytes.
+    #[staticmethod]
+    fn from_blake3_digest(digest: &[u8]) -> PyResult<Self> {
+        let arr: [u8; 32] = digest.try_into().map_err(|_| {
+            PyValueError::new_err(format!(
+                "BLAKE3 digest must be exactly 32 bytes, got {}",
+                digest.len()
+            ))
+        })?;
+        Ok(PyRawContentId {
+            inner: CoreRawContentId::from_blake3_digest(arr),
+        })
+    }
+
+    /// Parse a `RawContentId` from its CID binary form. Raises `ValueError` if
+    /// the bytes are not a CID, or are a CID of another profile (including a
+    /// dag-cbor `ContentId`).
+    #[staticmethod]
+    fn from_bytes(cid_bytes: &[u8]) -> PyResult<Self> {
+        CoreRawContentId::from_bytes(cid_bytes)
+            .map(|inner| PyRawContentId { inner })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Parse a `RawContentId` from its multibase CID string. Raises
+    /// `ValueError` for a non-CID or a CID of another profile.
+    #[staticmethod]
+    fn parse(s: &str) -> PyResult<Self> {
+        s.parse::<CoreRawContentId>()
+            .map(|inner| PyRawContentId { inner })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// `True` iff `content` hashes to this id.
+    fn verify(&self, content: &[u8]) -> bool {
+        self.inner.verify(content)
+    }
+
+    /// The full CID binary envelope (`bytes`).
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.to_bytes())
+    }
+
+    /// The raw 32-byte BLAKE3 digest (`bytes`), no envelope.
+    fn digest_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.digest_bytes())
+    }
+
+    /// Lowercase hex of the raw 32-byte digest: 64 chars, no prefix. A digest
+    /// accessor, not an identity — it is identical for a `ContentId` over the
+    /// same digest and must never be compared as if it were the id.
+    fn digest_hex(&self) -> String {
+        self.inner.digest_hex()
+    }
+
+    fn __str__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("RawContentId('{}')", self.inner)
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+
+    fn __ne__(&self, other: &Self) -> bool {
+        self.inner != other.inner
+    }
+
+    fn __hash__(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.inner.to_bytes().hash(&mut hasher);
         hasher.finish()
@@ -291,6 +437,7 @@ fn content_id(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<PyContentId> {
 #[pymodule]
 fn content_addressable(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyContentId>()?;
+    m.add_class::<PyRawContentId>()?;
     m.add_function(wrap_pyfunction!(to_canonical_dagcbor, m)?)?;
     m.add_function(wrap_pyfunction!(from_canonical_dagcbor, m)?)?;
     m.add_function(wrap_pyfunction!(content_id, m)?)?;

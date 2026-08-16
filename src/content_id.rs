@@ -37,7 +37,7 @@ pub const BLAKE3_HASH_CODE: u64 = 0x1e;
 /// implied on the wire by the `0x20` multihash length prefix. Changing it is a
 /// major version bump — see the
 /// [`ContentId` CID-parameters contract](ContentId#cid-parameters-frozen-at-010).
-const BLAKE3_DIGEST_LEN: usize = 32;
+pub(crate) const BLAKE3_DIGEST_LEN: usize = 32;
 
 /// The self-certifying identity of a value.
 ///
@@ -304,8 +304,52 @@ impl ContentId {
     ///
     /// Does not panic. A 32-byte digest always fits the multihash's 64-byte
     /// capacity, so the `wrap` call cannot fail.
+    ///
+    /// # Deprecated — the codec was a guess
+    ///
+    /// This door stamps the `dag-cbor` (`0x71`) codec on a digest it **cannot
+    /// know** came from canonical dag-cbor. Every real caller (kyln-lore
+    /// signatures, bare `blake3::hash` outputs, `blake3:<hex>` digests) held a
+    /// digest of *opaque bytes*, for which the honest identity is
+    /// [`RawContentId::from_blake3_digest`](crate::RawContentId::from_blake3_digest)
+    /// (CIDv1 · `raw` · BLAKE3) — byte-identical to those systems' existing raw
+    /// CIDs. If you genuinely hold a digest of canonical dag-cbor and the value
+    /// is gone, say so explicitly with
+    /// [`from_dag_cbor_digest`](Self::from_dag_cbor_digest). See decision record
+    /// `docs/adr/0003` (question 5).
+    #[deprecated(
+        since = "0.1.1",
+        note = "use RawContentId::from_blake3_digest for a digest of opaque bytes (the honest \
+                profile), or ContentId::from_dag_cbor_digest when the digest is known to be \
+                over canonical dag-cbor"
+    )]
     #[must_use]
     pub fn from_blake3_content_digest(digest: [u8; BLAKE3_DIGEST_LEN]) -> Self {
+        Self::wrap_blake3_digest(digest)
+    }
+
+    /// Wrap a precomputed 32-byte BLAKE3 digest **of canonical dag-cbor bytes**
+    /// as a `ContentId`, with no re-hash.
+    ///
+    /// The name asserts the precondition: the digest MUST be BLAKE3 over the
+    /// canonical dag-cbor encoding of a value — the same bytes
+    /// [`from_canonical_bytes`](Self::from_canonical_bytes) would have hashed.
+    /// This function cannot check that; a digest of anything else mints an id
+    /// whose `dag-cbor` codec is a lie (see the precondition discussion on
+    /// [`from_canonical_bytes`](Self::from_canonical_bytes)). If your digest is
+    /// over opaque bytes, you want
+    /// [`RawContentId::from_blake3_digest`](crate::RawContentId::from_blake3_digest).
+    ///
+    /// Emits exactly the bytes [`from_canonical_bytes`](Self::from_canonical_bytes)
+    /// emits for the same digest (one shared construction point), so
+    /// `from_dag_cbor_digest(blake3(c)) == from_canonical_bytes(c)`.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic: a 32-byte digest always fits the multihash's 64-byte
+    /// capacity.
+    #[must_use]
+    pub fn from_dag_cbor_digest(digest: [u8; BLAKE3_DIGEST_LEN]) -> Self {
         Self::wrap_blake3_digest(digest)
     }
 
@@ -636,14 +680,32 @@ mod cid_param_lock_tests {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // pins the deprecated door's behavior until it is removed
 mod no_rehash_digest_tests {
-    //! Tests for [`ContentId::from_blake3_content_digest`] (issue #10): the
+    //! Tests for [`ContentId::from_blake3_content_digest`] (issue #10) and its
+    //! explicit successor [`ContentId::from_dag_cbor_digest`] (#84): the
     //! guarded, no-rehash escape hatch that wraps an already-computed BLAKE3
     //! content digest as a `ContentId` **without hashing it again**. These pin
     //! both the produced CID shape and — critically — the *no-rehash invariant*
     //! that distinguishes this door from `from_canonical_bytes` (which hashes).
 
     use super::{ContentId, BLAKE3_DIGEST_LEN};
+
+    /// #84: `from_dag_cbor_digest` is the explicitly-named successor and emits
+    /// exactly the bytes the deprecated door emits (one shared construction
+    /// point), so migrating callers changes no ids.
+    #[test]
+    fn from_dag_cbor_digest_is_byte_identical_to_deprecated_door() {
+        let d = *blake3::hash(b"any canonical dag-cbor").as_bytes();
+        assert_eq!(
+            ContentId::from_dag_cbor_digest(d),
+            ContentId::from_blake3_content_digest(d)
+        );
+        assert_eq!(
+            ContentId::from_dag_cbor_digest(d),
+            ContentId::from_canonical_bytes(b"any canonical dag-cbor")
+        );
+    }
     use ipld_core::cid::Version;
 
     /// A non-trivial, fixed 32-byte digest (`[1, 2, 3, ..., 32]`). Deliberately

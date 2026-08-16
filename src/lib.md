@@ -85,8 +85,16 @@ removing or narrowing any of these is a **SemVer-breaking** event (a major
 bump); *adding* a new re-export is allowed additively. The frozen crate-root
 surface is exactly:
 
-- [`ContentId`] — the self-certifying identity (re-exported from
-  [`content_id`]).
+- [`ContentId`] — the self-certifying identity of a canonical structured
+  value (re-exported from [`content_id`]).
+- [`RawContentId`] — the identity of an opaque byte string, the *raw* profile
+  (CIDv1 · raw `0x55` · BLAKE3), from [`raw_id`]; and [`VerifiedCid`] — any
+  well-formed CID classified as `Content` / `Raw` / `Foreign`, from
+  [`verified`]. Both added in `0.1.1` (issue #84) as **additive** re-exports;
+  the raw profile's bytes are fixed by the CID spec and pinned by
+  `tests/raw_vectors.json`. The profile is part of the identity: a
+  `RawContentId` and a `ContentId` over the same digest are different ids and
+  never compare equal.
 - [`ContentAddressable`] — the one trait a type implements (from
   [`trait_def`]).
 - [`ContentError`] — the crate's error type (from [`error`]).
@@ -94,6 +102,10 @@ surface is exactly:
   `from_canonical_dagcbor` are reached as [`canonical::to_canonical_dagcbor`]
   etc., **not** re-exported at the root (one name per function, matching the
   doctests above and the PyO3 face).
+- `IdentityMigration` / `MigrationKind` — re-exported **only** under the
+  default-off, experimental `unstable-migration` feature (see the `migration`
+  module); the `legacy` adapters live under `unstable-legacy` (the `legacy`
+  module) and are not re-exported at the root.
 - [`MerkleNode`] — re-exported **only** when the default-off, experimental
   `unstable-merkle` feature is enabled; its bytes are not yet frozen (see [`merkle`]).
 
@@ -112,7 +124,8 @@ promoting their numeric codes to the root would signal a permanence the
 crate has not committed to, and the conservative default at a freeze is the
 smaller surface. `BLAKE3_DIGEST_LEN` stays private. The newer public items
 ([`ContentId::from_canonical_bytes_checked`], [`ContentId::digest_bytes`],
-[`ContentId::digest_hex`], [`ContentId::from_blake3_content_digest`],
+[`ContentId::digest_hex`], [`ContentId::from_dag_cbor_digest`] (and its
+deprecated predecessor `from_blake3_content_digest`),
 [`ContentAddressable::ensure_content_id`]) are intentional and individually
 documented at their definitions.
 

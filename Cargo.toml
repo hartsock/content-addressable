@@ -48,6 +48,20 @@ unstable-merkle = []
 # is owned elsewhere), so it adds nothing to tests/vectors.json.
 # CI and the pre-push hook exercise it via `--all-features`.
 unstable-store = []
+# `unstable-legacy` gates the explicit edge adapters for the legacy identifier
+# dialects still in the wild (kyln envelope-hex, nessie `<algo>:<hex>`, bare
+# BLAKE3 hex) -> `RawContentId` / `VerifiedCid` (`src/legacy.rs`, issue #84).
+# Default-OFF and NON-FROZEN on purpose: these exist to END the dialects, not
+# to bless them; canonical output stays base32-lower and the primary
+# `from_str` doors never learn these forms. Expected to shrink as consumers
+# migrate. CI and the pre-push hook exercise it via `--all-features`.
+unstable-legacy = []
+# `unstable-migration` gates `IdentityMigration` / `MigrationKind`
+# (`src/migration.rs`, issue #84): a content-addressed record that one identity
+# superseded another (recanonicalized / reprofiled / hash-rotated), so identity
+# changes are stated, never implied. Default-OFF; its field names are
+# load-bearing for the record's id and NON-FROZEN until its vectors land.
+unstable-migration = []
 
 [dependencies]
 # ipld-core re-exports the `cid` crate (as ipld_core::cid) which in turn

@@ -14,11 +14,17 @@
 pub mod canonical;
 pub mod content_id;
 pub mod error;
+pub mod raw_id;
 pub mod trait_def;
+pub mod verified;
 
 // --- Seams the catalog builds on (feature-gated infrastructure). ---
+#[cfg(feature = "unstable-legacy")]
+pub mod legacy;
 #[cfg(feature = "unstable-merkle")]
 pub mod merkle;
+#[cfg(feature = "unstable-migration")]
+pub mod migration;
 #[cfg(feature = "unstable-store")]
 pub mod store;
 
@@ -35,8 +41,12 @@ pub use content_id::ContentId;
 pub use error::ContentError;
 #[cfg(feature = "unstable-merkle")]
 pub use merkle::MerkleNode;
+#[cfg(feature = "unstable-migration")]
+pub use migration::{IdentityMigration, MigrationKind};
+pub use raw_id::RawContentId;
 #[cfg(feature = "unstable-store")]
 pub use store::{
     AddressedBytes, MemoryStore, NodeStore, NodeStoreExt, StoreError, StoreOperation, VerifiedStore,
 };
 pub use trait_def::ContentAddressable;
+pub use verified::VerifiedCid;
