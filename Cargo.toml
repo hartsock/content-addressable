@@ -15,7 +15,7 @@ default-members = ["."]
 
 [package]
 name = "content-addressable"
-version = "0.1.0"
+version = "0.1.1"
 # FROZEN policy (gate item #10, issue #9): the edition stays at 2021 and the
 # MSRV floor is `1.85` for the `0.1.x` line. 1.85 is the Rust 2024 edition
 # baseline, required transitively because blake3 >= 1.6 pulls cpufeatures 0.3
@@ -50,7 +50,7 @@ unstable-merkle = []
 unstable-store = []
 # `unstable-legacy` gates the explicit edge adapters for the legacy identifier
 # dialects still in the wild (kyln envelope-hex, nessie `<algo>:<hex>`, bare
-# BLAKE3 hex) -> `RawContentId` / `VerifiedCid` (`src/legacy.rs`, issue #84).
+# BLAKE3 hex) -> `RawContentId` / `ClassifiedCid` (`src/legacy.rs`, issue #84).
 # Default-OFF and NON-FROZEN on purpose: these exist to END the dialects, not
 # to bless them; canonical output stays base32-lower and the primary
 # `from_str` doors never learn these forms. Expected to shrink as consumers

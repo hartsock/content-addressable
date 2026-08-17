@@ -15,6 +15,67 @@ Two distributions ship from this one repository and share a version:
 The PyPI **distribution** name is `content-addressable` (hyphen); the **import**
 name is `content_addressable` (underscore).
 
+## [0.1.1] — the identity/classification layer
+
+Additive: the frozen `0.1.0` core contract is **untouched**, every golden vector
+is byte-identical, and identifiers minted under `0.1.0` remain valid. This
+release makes *foreign* content identity representable without ever minting it
+([#84], [ADR 0003]).
+
+### Added — frozen for `0.1.x`
+
+- **`RawContentId`** — CIDv1 · `raw` (`0x55`) · BLAKE3-256 (`0x1e`) · 32 bytes:
+  the identity of an opaque byte string, sibling to `ContentId` (the DAG-CBOR
+  profile). Same four presentation forms, same accessor names. Its bytes are
+  fixed by the CID specification, not by this crate, and pinned cross-language
+  by `tests/raw_vectors.json`. Rust **and** Python.
+- **`ClassifiedCid { Content | Raw | Foreign(ForeignCid) }`** — classification of
+  any well-formed CID. The three variants are **pairwise disjoint and jointly
+  total**: `ForeignCid`'s every constructor rejects a recognized profile, so each
+  CID has exactly one representation, and `Deserialize` *derives* the variant
+  from the wire bytes rather than trusting it.
+- **The profile law.** Codec + multihash algorithm + digest jointly constitute
+  identity. `RawContentId(x)` never equals `ContentId(x)` even when the digest
+  bytes coincide — no cross-type `PartialEq`, no `From` either way, and each
+  ingress rejects the other's codec. Compare identities as typed CID bytes,
+  never as `digest_hex()` (identical across profiles for the same digest).
+- **`ContentId::from_dag_cbor_digest`** — the honest no-rehash door for a digest
+  the caller knows is over canonical DAG-CBOR.
+
+### Deprecated
+
+- **`ContentId::from_blake3_content_digest`** (Rust and Python) — it stamped the
+  DAG-CBOR codec on a digest it could not know came from DAG-CBOR. Behavior is
+  unchanged for `0.1.x`; removal is a major-version event. Successors:
+  `RawContentId::from_blake3_digest` for opaque bytes,
+  `ContentId::from_dag_cbor_digest` for known-DAG-CBOR digests.
+
+### Added — experimental (NOT frozen), opt-in, default-off
+
+- **`unstable-legacy`** — parse-only edge adapters for the dialects still in the
+  wild (`legacy::kyln` envelope-hex, `legacy::nessie` `<algo>:<hex>`,
+  `legacy::bare_blake3`), pinned by `tests/legacy_vectors.json`. Rust-only by
+  design. Canonical `FromStr` **never** learns a legacy dialect, so enabling
+  this cannot change how canonical text parses.
+- **`unstable-migration`** — `IdentityMigration` / `MigrationKind`, a
+  content-addressed record stating that one identity superseded another.
+  Construction and both serde ingresses validate (non-mintable `to` and
+  self-migration are refused; `deny_unknown_fields` on a private wire shape).
+  **Its API and its bytes are both unfrozen until golden migration vectors
+  land** — its field names are load-bearing for its own id. Do not persist these
+  records as long-lived identity claims yet.
+
+### Notes
+
+- `ClassifiedCid` is named *Classified*, not *Verified*: it proves structural
+  validity and profile membership, never that content matches a digest. Content
+  verification remains `verify` / `ensure_content_id` (and `VerifiedStore`,
+  which does check bytes on read).
+- Canonical emitted text is still base32-lower only.
+
+[#84]: https://github.com/hartsock/content-addressable/issues/84
+[ADR 0003]: docs/adr/0003-identity-profiles-and-classified-cids.md
+
 ## [0.1.0] — first stable-contract release
 
 The first release to **freeze the core content-addressing contract** for the
@@ -101,4 +162,5 @@ release outside `0.1.x`.
 - Non-integer floats are outside the canonical vector set (DAG-CBOR float rules
   are handled per-language, not in the shared cross-language gate).
 
+[0.1.1]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.1
 [0.1.0]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.0

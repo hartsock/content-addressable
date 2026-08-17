@@ -198,6 +198,46 @@ deferred forced-collision TLA+ model tracked in [#71]) are documented in the
 `store` module docs; see the README's `store` section for the trust boundary in
 brief.
 
+### The `unstable-legacy` feature — experimental API, parse-only
+
+The default-off `unstable-legacy` feature ships the edge adapters for the legacy
+identifier dialects (`legacy::kyln`, `legacy::nessie`, `legacy::bare_blake3`).
+**Its API surface is not frozen** — these adapters exist to *end* those dialects
+and are expected to shrink and then go away, so treat them as a migration ramp
+rather than a contract.
+
+It defines **no new wire bytes of its own**: every adapter is parse-only and
+returns an ordinary `RawContentId` / `ClassifiedCid`, whose bytes are already
+frozen above. What *is* pinned is the mapping from each dialect to that result —
+`tests/legacy_vectors.json` (Rust gate `tests/legacy_conformance.rs`; the Python
+gate re-derives the SHA-256 rows with `hashlib`, so those rows are interop data
+rather than restated shapes). The adapters are deliberately **Rust-only**: a
+Python legacy-parsing face would widen exactly the surface [#84] narrows, so the
+vectors carry the portability instead.
+
+The frozen guarantee that *does* apply here is negative and stated above under
+the profile law: canonical `FromStr` never learns a legacy dialect, so enabling
+this feature cannot change how canonical text parses.
+
+### The `unstable-migration` feature — experimental API **and wire bytes**
+
+The default-off `unstable-migration` feature ships `IdentityMigration` /
+`MigrationKind` ([#84]): a content-addressed record stating that one identity
+superseded another. Construction and both serde ingresses are validating —
+private fields, a single `new` that rejects a non-mintable `to` and a
+self-migration, and a `Deserialize` that decodes a private wire shape with
+`deny_unknown_fields` and re-runs that constructor.
+
+**Neither its API nor its bytes are frozen.** The record is itself
+`ContentAddressable`, so its field names and their order are load-bearing for
+its own id: renaming a field moves the id of every migration record ever
+written. That is exactly why it stays unfrozen **until golden migration vectors
+land** and make its content-addressed representation explicit and reproducible
+across languages, the same bar `tests/vectors.json` and `tests/raw_vectors.json`
+already meet for the two mintable profiles. Until then it is deliberately absent
+from the vector set, and downstream systems should not persist these records as
+long-lived identity claims.
+
 [#3]: https://github.com/hartsock/content-addressable/issues/3
 [#4]: https://github.com/hartsock/content-addressable/issues/4
 [#5]: https://github.com/hartsock/content-addressable/issues/5
