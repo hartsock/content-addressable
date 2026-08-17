@@ -79,6 +79,50 @@ conventions exist for a CID in the wild:
    additively without breaking anything.
 3. **multibase base32-lower** — the `Display` string; the canonical text form.
 
+### The raw profile and the profile law ([#84], added `0.1.1`)
+
+`RawContentId` = CIDv1 · `raw` (`0x55`) · BLAKE3-256 (`0x1e`) · 32 bytes is the
+identity of an opaque byte string, sibling to `ContentId` (the DAG-CBOR
+profile). It is **additive**: the `ContentId` freeze above is untouched, and
+`RawContentId`'s bytes are fixed by the CID specification rather than by this
+crate — pinned cross-language by `tests/raw_vectors.json` (Rust gate
+`tests/raw_conformance.rs`, Python gate in `tests/test_content_addressable.py`).
+It carries the same four presentation forms with the same accessor names.
+
+**Law — the profile is semantic, not cosmetic.** Codec + multihash algorithm +
+digest jointly constitute identity. `RawContentId(x)` never compares equal to
+`ContentId(x)` even when the digest bytes coincide: there is no `PartialEq`
+across the types, no `From` in either direction, and each type's ingress
+(`from_bytes`, `FromStr`, `TryFrom<Cid>`, binary `Deserialize`) rejects the
+other's codec with `InvalidCidProfile`. Consumers compare identities as **typed
+CID bytes**, never as `digest_hex()` (which is identical across profiles for the
+same digest) and never as text. `ClassifiedCid { Content | Raw |
+Foreign(ForeignCid) }` carries and compares any well-formed CID (including ones
+this crate will not mint, e.g. `sha2-256`) under the same law.
+
+**Canonical form.** The three profiles are pairwise disjoint and jointly total
+over well-formed CIDs, and `ForeignCid`'s constructors (`new`, `TryFrom<Cid>`,
+`FromStr`, `from_bytes`, `Deserialize`) reject a recognized profile. So every
+CID has exactly one representation in `ClassifiedCid`, no variant can hold a CID
+outside its profile, and `Deserialize` **derives** the variant from the bytes
+rather than trusting it — a crafted link cannot land in the wrong variant. The
+type is named *Classified*, not *Verified*: it proves structural validity and
+profile membership, never that content matches a digest (that is
+`RawContentId::verify` / `ContentAddressable::verify`, which need the bytes).
+
+**Deprecation.** `ContentId::from_blake3_content_digest` (Rust and Python) is
+deprecated: it stamped the DAG-CBOR codec on a digest it could not know came
+from DAG-CBOR. Its behavior is unchanged for `0.1.x`. The explicit successors
+are `RawContentId::from_blake3_digest` (a digest of opaque bytes — the honest
+profile, byte-identical to kyln raw CIDs and bare `blake3` digests) and
+`ContentId::from_dag_cbor_digest` (a digest known to be over canonical DAG-CBOR;
+byte-identical to the deprecated door). Removal is a major-version event.
+
+**Text.** Emitted identifiers are base32-lower only. Legacy dialects are read
+solely through the default-off `unstable-legacy` adapters
+(`legacy::kyln`, `legacy::nessie`, `legacy::bare_blake3`), which exist to end
+those dialects and are expected to shrink; `from_str` never learns them.
+
 ### Error policy ([#7])
 
 `ContentError` is `#[non_exhaustive]`, so variants may be **added** additively
@@ -99,7 +143,8 @@ error path. Both return contracts are part of the frozen surface.
 ### Crate-root exports ([#9])
 
 The public crate-root re-export surface is frozen and minimal: `ContentId`,
-`ContentAddressable`, `ContentError`, and the `canonical` module (reached as
+`ContentAddressable`, `ContentError`, `RawContentId`, `ClassifiedCid` and
+`ForeignCid` (the latter three added by [#84]), and the `canonical` module (reached as
 `canonical::to_canonical_dagcbor` etc., not re-exported at the root). The
 codec/hash codes `DAG_CBOR_CODEC` / `BLAKE3_HASH_CODE` are `pub` in `content_id`
 but deliberately **not** promoted to the crate root; `BLAKE3_DIGEST_LEN` is
@@ -162,3 +207,4 @@ brief.
 [#9]: https://github.com/hartsock/content-addressable/issues/9
 [#10]: https://github.com/hartsock/content-addressable/issues/10
 [#71]: https://github.com/hartsock/content-addressable/issues/71
+[#84]: https://github.com/hartsock/content-addressable/issues/84
