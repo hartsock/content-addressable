@@ -8,7 +8,7 @@
 # targeting this manifest explicitly (see ../pyproject.toml `manifest-path`).
 [package]
 name = "content-addressable-py"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"

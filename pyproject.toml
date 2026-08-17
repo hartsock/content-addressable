@@ -9,7 +9,7 @@ build-backend = "maturin"
 
 [project]
 name = "content-addressable"
-version = "0.1.0"
+version = "0.1.1"
 description = "IPLD-native content addressing for Python: data that carries its own proof of integrity (BLAKE3 + CIDv1 + canonical dag-cbor)."
 readme = "README.md"
 requires-python = ">=3.9"
