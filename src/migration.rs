@@ -27,14 +27,28 @@
 //! crate owns the record's identity, not its authorization** — who may assert a
 //! migration, and how it is signed, is a consumer concern (agent-mesh, kyln).
 //!
-//! `from` may be any [`VerifiedCid`] (foreign identities are exactly what gets
-//! migrated); `to` must be one this crate mints — the constructor enforces it.
+//! # Invariants (unbypassable)
+//!
+//! The fields are **private** and there is exactly one construction path,
+//! [`IdentityMigration::new`], which enforces:
+//!
+//! 1. **`to` is mintable** — a migration must land on a profile this crate
+//!    mints ([`ClassifiedCid::Content`] or [`ClassifiedCid::Raw`]), otherwise it
+//!    is not a migration *onto* the shared algebra.
+//! 2. **`from != to`** — a record asserting an identity superseded itself
+//!    states nothing and would give two ids to one claim.
+//!
+//! `Deserialize` routes through that same constructor and rejects unknown
+//! fields, so a crafted record cannot smuggle an invalid migration past the
+//! invariants; and with no public fields and no setters, a valid record cannot
+//! be mutated into an invalid one afterwards. `from` may be any
+//! [`ClassifiedCid`] — foreign identities are exactly what gets migrated.
 
+use crate::classified::ClassifiedCid;
 use crate::content_id::ContentId;
 use crate::error::ContentError;
 use crate::trait_def::ContentAddressable;
-use crate::verified::VerifiedCid;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Why an identity changed. Closed on purpose: a migration whose kind is not
 /// one of these is a design conversation, not a new string.
@@ -57,30 +71,42 @@ pub enum MigrationKind {
 
 /// A content-addressed statement that `from` was superseded by `to`.
 ///
-/// Construct with [`IdentityMigration::new`], which refuses a foreign `to`.
-/// The record's own identity is [`ContentAddressable::content_id`] over its
+/// Construct with [`IdentityMigration::new`] — the only door, and the one that
+/// enforces the [invariants](self#invariants-unbypassable). Read with
+/// [`from`](Self::from), [`to`](Self::to), [`reason`](Self::reason). The
+/// record's own identity is [`ContentAddressable::content_id`] over its
 /// canonical dag-cbor; `from`/`to` land on the wire as real tag-42 links.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IdentityMigration {
-    /// The superseded identity — any profile, including foreign.
-    pub from: VerifiedCid,
-    /// The superseding identity — always one this crate mints.
-    pub to: VerifiedCid,
-    /// Why the identity changed.
-    pub reason: MigrationKind,
+    from: ClassifiedCid,
+    to: ClassifiedCid,
+    reason: MigrationKind,
+}
+
+/// The wire shape, used only to route `Deserialize` through
+/// [`IdentityMigration::new`] so the invariants hold for decoded records too.
+/// Field names and order mirror [`IdentityMigration`] exactly, so the canonical
+/// bytes are unchanged; `deny_unknown_fields` refuses a record carrying extra
+/// keys rather than silently dropping them.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IdentityMigrationWire {
+    from: ClassifiedCid,
+    to: ClassifiedCid,
+    reason: MigrationKind,
 }
 
 impl IdentityMigration {
-    /// Build a migration record.
+    /// Build a migration record — the only construction path.
     ///
     /// # Errors
     ///
-    /// [`ContentError::InvalidCidProfile`] if `to` is [`VerifiedCid::Foreign`]:
-    /// a migration must land on a profile this crate mints, otherwise it is
-    /// not a migration *onto* the shared algebra.
+    /// [`ContentError::InvalidCidProfile`] if `to` is
+    /// [`ClassifiedCid::Foreign`] (a migration must land on a mintable
+    /// profile), or if `from == to` (a self-migration states nothing).
     pub fn new(
-        from: VerifiedCid,
-        to: VerifiedCid,
+        from: ClassifiedCid,
+        to: ClassifiedCid,
         reason: MigrationKind,
     ) -> Result<Self, ContentError> {
         if !to.is_mintable() {
@@ -92,7 +118,30 @@ impl IdentityMigration {
                 ),
             });
         }
+        if from == to {
+            return Err(ContentError::InvalidCidProfile {
+                reason: format!("migration from and to are the same identity ({from}); a self-migration states nothing"),
+            });
+        }
         Ok(IdentityMigration { from, to, reason })
+    }
+
+    /// The superseded identity — any profile, including foreign.
+    #[must_use]
+    pub fn from(&self) -> ClassifiedCid {
+        self.from
+    }
+
+    /// The superseding identity — always one this crate mints.
+    #[must_use]
+    pub fn to(&self) -> ClassifiedCid {
+        self.to
+    }
+
+    /// Why the identity changed.
+    #[must_use]
+    pub fn reason(&self) -> MigrationKind {
+        self.reason
     }
 
     /// The identity of *this record* — what a signature or attestation binds
@@ -106,6 +155,16 @@ impl IdentityMigration {
     }
 }
 
+impl<'de> Deserialize<'de> for IdentityMigration {
+    /// Decodes the wire shape and re-runs [`IdentityMigration::new`], so a
+    /// decoded record satisfies exactly the invariants a constructed one does.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = IdentityMigrationWire::deserialize(deserializer)?;
+        IdentityMigration::new(wire.from, wire.to, wire.reason)
+            .map_err(<D::Error as serde::de::Error>::custom)
+    }
+}
+
 impl ContentAddressable for IdentityMigration {
     fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
         crate::canonical::to_canonical_dagcbor(self)
@@ -115,20 +174,24 @@ impl ContentAddressable for IdentityMigration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classified::ForeignCid;
     use crate::raw_id::RawContentId;
     use ipld_core::cid::multihash::Multihash;
     use ipld_core::cid::Cid;
 
-    fn sha_foreign(d: [u8; 32]) -> VerifiedCid {
-        VerifiedCid::from_cid(Cid::new_v1(0x55, Multihash::wrap(0x12, &d).unwrap()))
+    fn sha_foreign(d: [u8; 32]) -> ClassifiedCid {
+        ClassifiedCid::from_cid(Cid::new_v1(0x55, Multihash::wrap(0x12, &d).unwrap()))
     }
 
     #[test]
     fn foreign_to_raw_is_a_hash_rotation_and_has_a_stable_id() {
         let content = b"the artifact";
         let old = sha_foreign([1u8; 32]); // pretend REAPI sha2-256 identity
-        let new = VerifiedCid::from(RawContentId::from_content(content));
+        let new = ClassifiedCid::from(RawContentId::from_content(content));
         let m = IdentityMigration::new(old, new, MigrationKind::HashRotated).unwrap();
+        assert_eq!(m.from(), old);
+        assert_eq!(m.to(), new);
+        assert_eq!(m.reason(), MigrationKind::HashRotated);
         let id1 = m.id().unwrap();
         let bytes = m.canonical_form().unwrap();
         let back: IdentityMigration = crate::canonical::from_canonical_dagcbor(&bytes).unwrap();
@@ -140,8 +203,8 @@ mod tests {
     #[test]
     fn reprofile_records_a_real_identity_change() {
         let d = *blake3::hash(b"x").as_bytes();
-        let from = VerifiedCid::from(ContentId::from_dag_cbor_digest(d)); // the old lie
-        let to = VerifiedCid::from(RawContentId::from_blake3_digest(d)); // the honest raw id
+        let from = ClassifiedCid::from(ContentId::from_dag_cbor_digest(d)); // the old lie
+        let to = ClassifiedCid::from(RawContentId::from_blake3_digest(d)); // the honest raw id
         assert_ne!(from, to, "law 6: same digest, different identity");
         let m = IdentityMigration::new(from, to, MigrationKind::Reprofiled).unwrap();
         // Different reasons => different records => different record ids.
@@ -151,16 +214,107 @@ mod tests {
 
     #[test]
     fn foreign_target_is_refused() {
-        let from = VerifiedCid::from(RawContentId::from_content(b"a"));
+        let from = ClassifiedCid::from(RawContentId::from_content(b"a"));
         let err = IdentityMigration::new(from, sha_foreign([2u8; 32]), MigrationKind::HashRotated);
         assert!(matches!(err, Err(ContentError::InvalidCidProfile { .. })));
     }
 
     #[test]
+    fn self_migration_is_refused() {
+        let same = ClassifiedCid::from(RawContentId::from_content(b"same"));
+        for kind in [
+            MigrationKind::Recanonicalized,
+            MigrationKind::Reprofiled,
+            MigrationKind::HashRotated,
+        ] {
+            assert!(matches!(
+                IdentityMigration::new(same, same, kind),
+                Err(ContentError::InvalidCidProfile { .. })
+            ));
+        }
+    }
+
+    /// ADVERSARIAL: a crafted record cannot smuggle an invalid migration past
+    /// the invariants via `Deserialize` — in either serde flavor.
+    #[test]
+    fn deserialization_enforces_every_invariant() {
+        let raw = RawContentId::from_content(b"target");
+        let foreign = ForeignCid::new(Cid::new_v1(
+            0x55,
+            Multihash::wrap(0x12, &[5u8; 32]).unwrap(),
+        ))
+        .unwrap();
+
+        // (a) foreign `to`
+        let bad_to = serde_json::json!({
+            "from": ClassifiedCid::from(raw).to_string(),
+            "to": foreign.to_string(),
+            "reason": "hash_rotated",
+        });
+        let err = serde_json::from_value::<IdentityMigration>(bad_to.clone()).unwrap_err();
+        assert!(err.to_string().contains("mintable"), "{err}");
+
+        // (b) self-migration
+        let self_mig = serde_json::json!({
+            "from": ClassifiedCid::from(raw).to_string(),
+            "to": ClassifiedCid::from(raw).to_string(),
+            "reason": "reprofiled",
+        });
+        let err = serde_json::from_value::<IdentityMigration>(self_mig).unwrap_err();
+        assert!(err.to_string().contains("same identity"), "{err}");
+
+        // (c) unknown field
+        let extra = serde_json::json!({
+            "from": ClassifiedCid::from(foreign).to_string(),
+            "to": ClassifiedCid::from(raw).to_string(),
+            "reason": "hash_rotated",
+            "signature": "not part of this record",
+        });
+        assert!(serde_json::from_value::<IdentityMigration>(extra).is_err());
+
+        // (d) the same invalid record in binary/IPLD form (dag-cbor links).
+        #[derive(Serialize)]
+        struct Craft {
+            from: ClassifiedCid,
+            to: ClassifiedCid,
+            reason: MigrationKind,
+        }
+        let crafted = crate::canonical::to_canonical_dagcbor(&Craft {
+            from: ClassifiedCid::from(raw),
+            to: ClassifiedCid::from(foreign),
+            reason: MigrationKind::HashRotated,
+        })
+        .unwrap();
+        assert!(crate::canonical::from_canonical_dagcbor::<IdentityMigration>(&crafted).is_err());
+
+        let crafted_self = crate::canonical::to_canonical_dagcbor(&Craft {
+            from: ClassifiedCid::from(raw),
+            to: ClassifiedCid::from(raw),
+            reason: MigrationKind::Reprofiled,
+        })
+        .unwrap();
+        assert!(
+            crate::canonical::from_canonical_dagcbor::<IdentityMigration>(&crafted_self).is_err()
+        );
+
+        // (e) a valid record still decodes, and to the same id.
+        let good = IdentityMigration::new(
+            ClassifiedCid::from(foreign),
+            ClassifiedCid::from(raw),
+            MigrationKind::HashRotated,
+        )
+        .unwrap();
+        let bytes = good.canonical_form().unwrap();
+        let back: IdentityMigration = crate::canonical::from_canonical_dagcbor(&bytes).unwrap();
+        assert_eq!(back, good);
+        assert_eq!(back.id().unwrap(), good.id().unwrap());
+    }
+
+    #[test]
     fn links_are_tag42_on_the_wire() {
         let m = IdentityMigration::new(
-            VerifiedCid::from(RawContentId::from_content(b"a")),
-            VerifiedCid::from(RawContentId::from_content(b"b")),
+            ClassifiedCid::from(RawContentId::from_content(b"a")),
+            ClassifiedCid::from(RawContentId::from_content(b"b")),
             MigrationKind::Recanonicalized,
         )
         .unwrap();

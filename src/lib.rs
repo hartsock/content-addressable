@@ -12,11 +12,11 @@
 
 // --- Spine: the minimal, stable, always-on surface. ---
 pub mod canonical;
+pub mod classified;
 pub mod content_id;
 pub mod error;
 pub mod raw_id;
 pub mod trait_def;
-pub mod verified;
 
 // --- Seams the catalog builds on (feature-gated infrastructure). ---
 #[cfg(feature = "unstable-legacy")]
@@ -37,6 +37,7 @@ pub mod structures;
 // `structures::…` path and are deliberately NOT flattened here (freeze-minimally
 // applied to the public surface), so this list does not grow with the catalog.
 // Removing or narrowing an entry is a major version bump.
+pub use classified::{ClassifiedCid, ForeignCid};
 pub use content_id::ContentId;
 pub use error::ContentError;
 #[cfg(feature = "unstable-merkle")]
@@ -49,4 +50,3 @@ pub use store::{
     AddressedBytes, MemoryStore, NodeStore, NodeStoreExt, StoreError, StoreOperation, VerifiedStore,
 };
 pub use trait_def::ContentAddressable;
-pub use verified::VerifiedCid;

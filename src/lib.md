@@ -88,9 +88,11 @@ surface is exactly:
 - [`ContentId`] — the self-certifying identity of a canonical structured
   value (re-exported from [`content_id`]).
 - [`RawContentId`] — the identity of an opaque byte string, the *raw* profile
-  (CIDv1 · raw `0x55` · BLAKE3), from [`raw_id`]; and [`VerifiedCid`] — any
-  well-formed CID classified as `Content` / `Raw` / `Foreign`, from
-  [`verified`]. Both added in `0.1.1` (issue #84) as **additive** re-exports;
+  (CIDv1 · raw `0x55` · BLAKE3), from [`raw_id`]; and [`ClassifiedCid`] /
+  [`ForeignCid`] — any well-formed CID classified as `Content` / `Raw` /
+  `Foreign`, from [`classified`], where the classification is canonical (no CID
+  has two representations, and `Deserialize` derives the variant rather than
+  trusting it). Added by issue #84 as **additive** re-exports;
   the raw profile's bytes are fixed by the CID spec and pinned by
   `tests/raw_vectors.json`. The profile is part of the identity: a
   `RawContentId` and a `ContentId` over the same digest are different ids and

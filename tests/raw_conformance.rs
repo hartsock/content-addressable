@@ -11,7 +11,7 @@ mod common;
 use common::hex_to_bytes;
 use content_addressable::content_id::BLAKE3_HASH_CODE;
 use content_addressable::raw_id::RAW_CODEC;
-use content_addressable::{ContentId, RawContentId, VerifiedCid};
+use content_addressable::{ClassifiedCid, ContentId, RawContentId};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -66,8 +66,8 @@ fn raw_vectors_reproduce() {
             id
         );
         assert_eq!(
-            VerifiedCid::from_bytes(&id.to_bytes()).unwrap(),
-            VerifiedCid::Raw(id)
+            ClassifiedCid::from_bytes(&id.to_bytes()).unwrap(),
+            ClassifiedCid::Raw(id)
         );
     }
 }
@@ -88,7 +88,7 @@ fn same_digest_other_profile_is_a_different_identity() {
             .parse::<RawContentId>()
             .is_err());
         assert!(v.raw_content_id_str.parse::<ContentId>().is_err());
-        assert_ne!(VerifiedCid::from(raw), VerifiedCid::from(dag));
+        assert_ne!(ClassifiedCid::from(raw), ClassifiedCid::from(dag));
     }
 }
 
@@ -109,7 +109,7 @@ fn legacy_adapters_land_on_pinned_ids() {
         // nessie: "blake3:<hex>".
         assert_eq!(
             legacy::nessie::parse(&format!("blake3:{}", v.digest_hex)).unwrap(),
-            VerifiedCid::Raw(id),
+            ClassifiedCid::Raw(id),
             "{}",
             v.name
         );

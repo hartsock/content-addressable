@@ -96,9 +96,19 @@ across the types, no `From` in either direction, and each type's ingress
 (`from_bytes`, `FromStr`, `TryFrom<Cid>`, binary `Deserialize`) rejects the
 other's codec with `InvalidCidProfile`. Consumers compare identities as **typed
 CID bytes**, never as `digest_hex()` (which is identical across profiles for the
-same digest) and never as text. `VerifiedCid { Content | Raw | Foreign(Cid) }`
-carries and compares any well-formed CID (including ones this crate will not
-mint, e.g. `sha2-256`) under the same law.
+same digest) and never as text. `ClassifiedCid { Content | Raw |
+Foreign(ForeignCid) }` carries and compares any well-formed CID (including ones
+this crate will not mint, e.g. `sha2-256`) under the same law.
+
+**Canonical form.** The three profiles are pairwise disjoint and jointly total
+over well-formed CIDs, and `ForeignCid`'s constructors (`new`, `TryFrom<Cid>`,
+`FromStr`, `from_bytes`, `Deserialize`) reject a recognized profile. So every
+CID has exactly one representation in `ClassifiedCid`, no variant can hold a CID
+outside its profile, and `Deserialize` **derives** the variant from the bytes
+rather than trusting it — a crafted link cannot land in the wrong variant. The
+type is named *Classified*, not *Verified*: it proves structural validity and
+profile membership, never that content matches a digest (that is
+`RawContentId::verify` / `ContentAddressable::verify`, which need the bytes).
 
 **Deprecation.** `ContentId::from_blake3_content_digest` (Rust and Python) is
 deprecated: it stamped the DAG-CBOR codec on a digest it could not know came
@@ -133,8 +143,8 @@ error path. Both return contracts are part of the frozen surface.
 ### Crate-root exports ([#9])
 
 The public crate-root re-export surface is frozen and minimal: `ContentId`,
-`ContentAddressable`, `ContentError`, `RawContentId` and `VerifiedCid` (the latter
-two added `0.1.1`, [#84]), and the `canonical` module (reached as
+`ContentAddressable`, `ContentError`, `RawContentId`, `ClassifiedCid` and
+`ForeignCid` (the latter three added by [#84]), and the `canonical` module (reached as
 `canonical::to_canonical_dagcbor` etc., not re-exported at the root). The
 codec/hash codes `DAG_CBOR_CODEC` / `BLAKE3_HASH_CODE` are `pub` in `content_id`
 but deliberately **not** promoted to the crate root; `BLAKE3_DIGEST_LEN` is

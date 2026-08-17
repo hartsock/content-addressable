@@ -23,10 +23,18 @@ two profiles**, and the Rust/Python *type* says which:
 constitute identity: `RawContentId(x)` and `ContentId(x)` are *different
 identities* even when their 32 digest bytes are the same, they never compare
 equal, and each type's parsers reject the other's CIDs. A third type,
-`VerifiedCid { Content | Raw | Foreign(Cid) }`, can *carry and compare* any
-well-formed CID (a `sha2-256` REAPI digest, a CIDv0, …) without this crate ever
-*minting* one — algorithm agility in the verifier, no algorithm ambiguity in the
-minter. Decision record: [`docs/adr/0003`](docs/adr/0003-identity-profiles-and-verified-cids.md).
+`ClassifiedCid { Content | Raw | Foreign(ForeignCid) }`, can *carry and compare*
+any well-formed CID (a `sha2-256` REAPI digest, a CIDv0, …) without this crate
+ever *minting* one — algorithm agility in the verifier, no algorithm ambiguity in the
+minter. Decision record: [`docs/adr/0003`](docs/adr/0003-identity-profiles-and-classified-cids.md).
+
+`ClassifiedCid` is **canonical**: the three profiles are pairwise disjoint and
+jointly total over well-formed CIDs, and `ForeignCid`'s constructors reject a
+recognized profile — so every CID has exactly one representation, and no
+variant can hold a CID outside its own profile, including through
+`Deserialize` (the variant is derived from the bytes, never trusted from the
+wire). It is named *Classified*, not *Verified*, because it proves structural
+validity and profile membership — **not** that content matches a digest.
 
 Rust is the core implementation; the Python package is a PyO3 binding over that
 **same Rust core**, so an id computed in Python is byte-identical to the one Rust
@@ -43,7 +51,7 @@ named to say so.
 | Surface | Default | Stability |
 |---------|:-------:|-----------|
 | `ContentId`, canonical encoding, core errors, presentation, MSRV | Yes | **Frozen for `0.1.x`** — changing any is a breaking release outside `0.1.x` |
-| `RawContentId`, `VerifiedCid` (added `0.1.1`, [#84]) | Yes | **Stable, additive** — the raw profile's bytes are fixed by the CID spec (CIDv1 · raw · BLAKE3-256) and pinned cross-language by `tests/raw_vectors.json`; the `ContentId` freeze is untouched |
+| `RawContentId`, `ClassifiedCid`, `ForeignCid` (added [#84]) | Yes | **Stable, additive** — the raw profile's bytes are fixed by the CID spec (CIDv1 · raw · BLAKE3-256) and pinned cross-language by `tests/raw_vectors.json`; the `ContentId` freeze is untouched |
 | Python core parity | Separate package | Same core byte profiles |
 | `unstable-merkle` feature | No | **Experimental** — serialized node bytes NOT frozen |
 | `unstable-store` feature | No | **Experimental** — trait/API surface NOT frozen (no new wire format of its own) |
@@ -171,7 +179,7 @@ precondition — it is **not** universally safe.
 | Identify opaque bytes (a file, chunk, binary, payload) | `RawContentId::from_content(b)` / `RawContentId.from_content(b)` | Hashes the bytes; nothing to get wrong — the bytes *are* the content |
 | Wrap an existing BLAKE3 digest **of opaque bytes** | `RawContentId::from_blake3_digest(d)` / `RawContentId.from_blake3_digest(d)` | No rehash; the honest home of the no-rehash bridge (byte-identical to kyln raw CIDs / bare `blake3` digests) |
 | Wrap an existing BLAKE3 digest **known to be over canonical DAG-CBOR** | `ContentId::from_dag_cbor_digest(d)` / `ContentId.from_dag_cbor_digest(d)` | No rehash; the name asserts the precondition. `from_blake3_content_digest` is **deprecated** in its favor ([#84]): it stamped DAG-CBOR on a digest it could not know came from DAG-CBOR |
-| Hold a CID you did not mint (REAPI `sha2-256`, CIDv0, …) | `VerifiedCid::from_str` / `VerifiedCid::from_bytes` | Classifies as `Content` / `Raw` / `Foreign`; foreign ids are carried and compared, never minted |
+| Hold a CID you did not mint (REAPI `sha2-256`, CIDv0, …) | `ClassifiedCid::from_str` / `ClassifiedCid::from_bytes` / `ClassifiedCid::from_cid` | Classifies as `Content` / `Raw` / `Foreign`; foreign ids are carried and compared, never minted |
 
 ## Presentation forms
 
@@ -209,18 +217,23 @@ All `unstable-*` features are **default-off** and exercised in CI via
 
 `legacy::kyln::parse(envelope_hex) -> RawContentId` (kyln's hand-rolled CIDv1 is
 byte-identical to CIDv1 raw/BLAKE3), `legacy::nessie::parse("<algo>:<hex>")
--> VerifiedCid` (`blake3` → `Raw`, `sha2-256` → `Foreign`), and
+-> ClassifiedCid` (`blake3` → `Raw`, `sha2-256` → `Foreign`), and
 `legacy::bare_blake3::parse(hex) -> RawContentId`. Parsers only — canonical
 output stays base32-lower. Expected to shrink as consumers migrate.
 
 ### `unstable-migration` — identity changes are stated, never implied
 
-`IdentityMigration { from: VerifiedCid, to: VerifiedCid, reason: MigrationKind }`
+`IdentityMigration { from: ClassifiedCid, to: ClassifiedCid, reason: MigrationKind }`
 is a content-addressed record that one identity superseded another
-(`Recanonicalized` / `Reprofiled` / `HashRotated`); `to` must be a profile this
-crate mints. Re-canonicalizing a value or re-profiling a digest is an *identity
-migration*, and the record — not an equality — is what provenance follows. Who
-may assert one, and how it is signed, is a consumer concern.
+(`Recanonicalized` / `Reprofiled` / `HashRotated`). Re-canonicalizing a value or
+re-profiling a digest is an *identity migration*, and the record — not an
+equality — is what provenance follows. Who may assert one, and how it is signed,
+is a consumer concern.
+
+Its fields are private with one construction path, `IdentityMigration::new`,
+which enforces that `to` is **mintable** and that `from != to`; `Deserialize`
+routes through that same constructor and rejects unknown fields, so a decoded
+record satisfies exactly the invariants a constructed one does.
 
 ### `merkle` — content-addressed DAG nodes
 

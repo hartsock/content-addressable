@@ -1,0 +1,57 @@
+[
+  {
+    "name": "empty",
+    "content_hex": "",
+    "kyln_envelope_hex": "01551e20af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+    "nessie_blake3_text": "blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+    "bare_blake3_hex": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+    "expect_raw_content_id_str": "bafkr4ifpcne3t5pzugtkaqcn5i3nzskjtpfslsnnyejlpte2spfoihzsmi",
+    "nessie_sha256_text": "sha2-256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "expect_foreign_cid_str": "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+    "expect_foreign_cid_bytes_hex": "01551220e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "hello",
+    "content_hex": "68656c6c6f",
+    "kyln_envelope_hex": "01551e20ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+    "nessie_blake3_text": "blake3:ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+    "bare_blake3_hex": "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+    "expect_raw_content_id_str": "bafkr4ihkr4ld3m4gqkjf4reryxsy2s5tkbxprqkow6fin2iiyvreuzzab4",
+    "nessie_sha256_text": "sha2-256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "expect_foreign_cid_str": "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq",
+    "expect_foreign_cid_bytes_hex": "015512202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  },
+  {
+    "name": "quick_brown_fox",
+    "content_hex": "54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67",
+    "kyln_envelope_hex": "01551e202f1514181aadccd913abd94cfa592701a5686ab23f8df1dff1b74710febc6d4a",
+    "nessie_blake3_text": "blake3:2f1514181aadccd913abd94cfa592701a5686ab23f8df1dff1b74710febc6d4a",
+    "bare_blake3_hex": "2f1514181aadccd913abd94cfa592701a5686ab23f8df1dff1b74710febc6d4a",
+    "expect_raw_content_id_str": "bafkr4ibpcukbqgvnztmrhk6zjt5fsjybuvugvmr7rxy574nxi4ip5pdnji",
+    "nessie_sha256_text": "sha2-256:d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+    "expect_foreign_cid_str": "bafkreigxvd53gb6xqckgtsu2xsyaqlsprvlfdzdnhtnxmlic2c7tpspfsi",
+    "expect_foreign_cid_bytes_hex": "01551220d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+  },
+  {
+    "name": "kyln_projection",
+    "content_hex": "6b796c6e2070726f6a656374696f6e",
+    "kyln_envelope_hex": "01551e206096edf702479e483bd7238a183a07fbe890ddc43a36fccc4de7c50942191723",
+    "nessie_blake3_text": "blake3:6096edf702479e483bd7238a183a07fbe890ddc43a36fccc4de7c50942191723",
+    "bare_blake3_hex": "6096edf702479e483bd7238a183a07fbe890ddc43a36fccc4de7c50942191723",
+    "expect_raw_content_id_str": "bafkr4idas3w7oashtzedxvzdrimdub735cin3rb2g36mytphyueuegixem",
+    "nessie_sha256_text": "sha2-256:277bf7eb392799e17d61a63e4b08fd7a761cafcf36b5f4d61b6dde731a21db2f",
+    "expect_foreign_cid_str": "bafkreibhpp36wojhthqx2ynghzfqr7l2oyok7tzwwx2nmg3n3zzruio3f4",
+    "expect_foreign_cid_bytes_hex": "01551220277bf7eb392799e17d61a63e4b08fd7a761cafcf36b5f4d61b6dde731a21db2f"
+  },
+  {
+    "name": "all_byte_values",
+    "content_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "kyln_envelope_hex": "01551e204a495ba42461748eca8fdad618f976aa726cc2903de9fcb40735a786ac1c196b",
+    "nessie_blake3_text": "blake3:4a495ba42461748eca8fdad618f976aa726cc2903de9fcb40735a786ac1c196b",
+    "bare_blake3_hex": "4a495ba42461748eca8fdad618f976aa726cc2903de9fcb40735a786ac1c196b",
+    "expect_raw_content_id_str": "bafkr4ickjfn2ijdboshmvd622ymps5vkojwmfeb55h6libzvu6dkyhaznm",
+    "nessie_sha256_text": "sha2-256:40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+    "expect_foreign_cid_str": "bafkreicav7zotuwysixepl6umshgsz2jofmhqx55dwuhbzyrajtl7fciqa",
+    "expect_foreign_cid_bytes_hex": "0155122040aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880"
+  }
+]

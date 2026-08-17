@@ -1,11 +1,11 @@
 //! Explicit **edge adapters** for the legacy identifier dialects still in the
-//! wild, so consumers can migrate onto [`RawContentId`] / [`VerifiedCid`]
+//! wild, so consumers can migrate onto [`RawContentId`] / [`ClassifiedCid`]
 //! without those dialects ever entering the primary API.
 //!
 //! **Feature-gated (`unstable-legacy`, default OFF) and NON-FROZEN.** These
 //! parsers exist to *end* the dialects, not to bless them: canonical output is
 //! always the base32-lower multibase string, and `ContentId::from_str` /
-//! `RawContentId::from_str` / `VerifiedCid::from_str` are deliberately never
+//! `RawContentId::from_str` / `ClassifiedCid::from_str` are deliberately never
 //! taught these forms (decision record `docs/adr/0003`, question 3). Expect this
 //! module to shrink and eventually disappear as consumers finish migrating.
 //!
@@ -14,7 +14,7 @@
 //! | Dialect | Text | Bytes it denotes | Becomes |
 //! |---|---|---|---|
 //! | [`kyln`] | hex of the whole CID envelope, e.g. `01551e20…` | a spec CIDv1(raw `0x55`, blake3 `0x1e`, 32) — kyln's hand-rolled encoder emits exactly the standard octets | [`RawContentId`] |
-//! | [`nessie`] | `blake3:<64 hex>` or `sha2-256:<64 hex>` | a bare multihash (no CID envelope) | `blake3` → [`VerifiedCid::Raw`]; `sha2-256` → [`VerifiedCid::Foreign`] (CIDv1 raw/sha2-256; verifiable, not mintable) |
+//! | [`nessie`] | `blake3:<64 hex>` or `sha2-256:<64 hex>` | a bare multihash (no CID envelope) | `blake3` → [`ClassifiedCid::Raw`]; `sha2-256` → [`ClassifiedCid::Foreign`] (CIDv1 raw/sha2-256; verifiable, not mintable) |
 //! | [`bare_blake3`] | 64 hex chars, no prefix (`blake3::Hash::to_hex`, agent-mesh `payload_cid`, agent-store `content_hash`) | a raw 32-byte BLAKE3 digest of opaque bytes | [`RawContentId`] |
 //!
 //! Note what is **not** claimed: parsing an identifier does not migrate the
@@ -23,9 +23,9 @@
 //! be recorded as an `IdentityMigration` (`unstable-migration`), never treated
 //! as equality.
 
+use crate::classified::ClassifiedCid;
 use crate::error::ContentError;
 use crate::raw_id::RawContentId;
-use crate::verified::VerifiedCid;
 use core::fmt;
 use core::str::FromStr;
 use ipld_core::cid::multihash::Multihash;
@@ -92,7 +92,7 @@ pub mod kyln {
     /// [`ContentError::InvalidCid`] if the text is not hex / not a CID;
     /// [`ContentError::InvalidCidProfile`] if it is a CID of some other profile
     /// (kyln also has codes for sha256/sha512 — those are foreign here; use
-    /// [`super::nessie`]-style handling via [`VerifiedCid`] if you meet one).
+    /// [`super::nessie`]-style handling via [`ClassifiedCid`] if you meet one).
     pub fn parse(envelope_hex: &str) -> Result<RawContentId, ContentError> {
         let cid = Cid::from_str(&format!("f{envelope_hex}"))
             .map_err(|e| invalid(format!("not a hex-encoded CID envelope: {e}")))?;
@@ -107,12 +107,12 @@ pub mod nessie {
     /// Multihash code for `sha2-256` (`0x12`), the REAPI-facing algorithm.
     pub const SHA2_256_HASH_CODE: u64 = 0x12;
 
-    /// Parse a nessie `"<algo>:<hex>"` digest into a [`VerifiedCid`].
+    /// Parse a nessie `"<algo>:<hex>"` digest into a [`ClassifiedCid`].
     ///
-    /// `blake3:<hex>` becomes [`VerifiedCid::Raw`] (a raw-profile identity of
+    /// `blake3:<hex>` becomes [`ClassifiedCid::Raw`] (a raw-profile identity of
     /// the bytes nessie hashed — byte-identical to
     /// [`RawContentId::from_blake3_digest`]). `sha2-256:<hex>` becomes
-    /// [`VerifiedCid::Foreign`] wrapping a CIDv1(raw, sha2-256): this crate can
+    /// [`ClassifiedCid::Foreign`] wrapping a CIDv1(raw, sha2-256): this crate can
     /// carry, compare and link it, but will not mint sha2-256 identities.
     /// nessie's own multihash bytes (`to_multihash_bytes`) are the standard
     /// encoding, so this is lossless.
@@ -121,17 +121,17 @@ pub mod nessie {
     ///
     /// [`ContentError::InvalidCid`] for an unknown algorithm name, a missing
     /// `:`, or a malformed digest.
-    pub fn parse(text: &str) -> Result<VerifiedCid, ContentError> {
+    pub fn parse(text: &str) -> Result<ClassifiedCid, ContentError> {
         let (algo, hex) = text
             .split_once(':')
             .ok_or_else(|| invalid("expected \"<algo>:<hex>\""))?;
         let digest = decode_hex32(hex)?;
         match algo {
-            "blake3" => Ok(VerifiedCid::Raw(RawContentId::from_blake3_digest(digest))),
+            "blake3" => Ok(ClassifiedCid::Raw(RawContentId::from_blake3_digest(digest))),
             "sha2-256" => {
                 let mh = Multihash::wrap(SHA2_256_HASH_CODE, &digest)
                     .expect("32-byte digest fits a 64-byte multihash");
-                Ok(VerifiedCid::from_cid(Cid::new_v1(
+                Ok(ClassifiedCid::from_cid(Cid::new_v1(
                     crate::raw_id::RAW_CODEC,
                     mh,
                 )))
@@ -206,9 +206,9 @@ mod tests {
     fn nessie_blake3_is_raw_and_sha256_is_foreign() {
         let d = digest();
         let raw = nessie::parse(&format!("blake3:{}", hex(&d))).unwrap();
-        assert_eq!(raw, VerifiedCid::Raw(RawContentId::from_blake3_digest(d)));
+        assert_eq!(raw, ClassifiedCid::Raw(RawContentId::from_blake3_digest(d)));
         let sha = nessie::parse(&format!("sha2-256:{}", hex(&d))).unwrap();
-        assert!(matches!(sha, VerifiedCid::Foreign(_)));
+        assert!(matches!(sha, ClassifiedCid::Foreign(_)));
         assert!(!sha.is_mintable());
         assert_eq!(sha.hash_code(), 0x12);
         assert_eq!(sha.codec(), 0x55);
