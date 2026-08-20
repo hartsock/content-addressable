@@ -69,7 +69,7 @@ unstable-migration = []
 # feature turns on `cid/serde`, which encodes a Cid as a dag-cbor tag-42 link.
 ipld-core = { version = "0.4", features = ["serde"] }
 # Canonical dag-cbor codec (strict map ordering, definite-length, tag-42 links).
-serde_ipld_dagcbor = "0.6"
+serde_ipld_dagcbor = "0.7"
 # BLAKE3 digest (multihash code 0x1e). The `^1` range stays open and resolves to
 # the latest (1.8.x); blake3 >= 1.6 pulls cpufeatures 0.3 (edition2024), which is
 # exactly why the declared MSRV is 1.85. The MSRV CI job (rust-toolchain@1.85) is
