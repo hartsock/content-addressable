@@ -45,8 +45,12 @@ canonical DAG-CBOR. Passing non-canonical bytes mints a misleading id — a logi
 error, unenforced by design. The safe defaults are `content_id` /
 `to_canonical_dagcbor` (which produce canonical bytes for you).
 
-`from_canonical_bytes_checked` re-encode-validates foreign / untrusted bytes and
-returns the typed `ContentError::NonCanonical` (or `DecodingError` for non-DAG-CBOR).
+`from_canonical_bytes_checked` validates foreign / untrusted bytes and **refuses**
+anything that is not canonical DAG-CBOR, returning a typed error rather than
+minting an id. The refusal is the frozen part; which variant carries it is not.
+Since `serde_ipld_dagcbor` 0.7 decodes strictly, most non-canonical forms now
+arrive as `DecodingError` and `ContentError::NonCanonical` stays as a backstop —
+match both when you mean "the bytes were not canonical".
 
 The pairing is frozen as `from_canonical_bytes` / `from_canonical_bytes_checked`
 — the unchecked door is **not** renamed to `_unchecked`.

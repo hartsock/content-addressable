@@ -16,7 +16,7 @@
 //! |-----------|--------------------------|
 //! | [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor) | [`EncodingError`](ContentError::EncodingError) |
 //! | [`from_canonical_dagcbor`](crate::canonical::from_canonical_dagcbor) | [`DecodingError`](ContentError::DecodingError) |
-//! | [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) | [`DecodingError`](ContentError::DecodingError) (not dag-cbor), [`NonCanonical`](ContentError::NonCanonical) (valid but non-canonical), [`EncodingError`](ContentError::EncodingError) (re-encode failed) |
+//! | [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) | [`DecodingError`](ContentError::DecodingError) (not canonical dag-cbor — the strict codec refuses most non-canonical forms here), [`NonCanonical`](ContentError::NonCanonical) (decoded, but re-encoding differs — a backstop), [`EncodingError`](ContentError::EncodingError) (re-encode failed) |
 //! | [`ContentId::from_bytes`](crate::ContentId::from_bytes) / [`FromStr`](core::str::FromStr) / [`TryFrom<Cid>`](crate::ContentId) / binary `Deserialize` | [`InvalidCid`](ContentError::InvalidCid) (not a CID at all) or [`InvalidCidProfile`](ContentError::InvalidCidProfile) (a valid CID that is not the frozen profile) |
 //! | [`content_id`](crate::ContentAddressable::content_id) | propagates `canonical_form`'s error only (typically [`EncodingError`](ContentError::EncodingError)) |
 //! | [`verify`](crate::ContentAddressable::verify) | propagates [`content_id`](crate::ContentAddressable::content_id) only; a *mismatch* is `Ok(false)`, never an `Err` |
@@ -127,10 +127,23 @@ pub enum ContentError {
     /// Returned only by the opt-in
     /// [`from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked)
     /// when the input decodes as an [`Ipld`](ipld_core::ipld::Ipld) value but
-    /// re-encoding it does **not** reproduce the input bytes (wrong map-key
-    /// order, indefinite-length items, non-smallest integers, …). The fast
+    /// re-encoding it does **not** reproduce the input bytes. The fast
     /// [`from_canonical_bytes`](crate::ContentId::from_canonical_bytes) primitive
     /// never produces this — it trusts its precondition and only hashes.
+    ///
+    /// # This is a backstop, not the usual refusal
+    ///
+    /// The non-canonical forms this variant was written for — wrong map-key
+    /// order, indefinite-length items, non-smallest integers, duplicate keys —
+    /// are refused *one step earlier*, at the decode, since `serde_ipld_dagcbor`
+    /// 0.7 made its decoder strict. They surface as
+    /// [`DecodingError`](ContentError::DecodingError). This variant is retained
+    /// because the canonicality guarantee belongs to the checked door, not to
+    /// whatever the codec happens to enforce this release; it fires only for a
+    /// non-canonical form a future codec lets through.
+    ///
+    /// **Match both variants** when the question you are asking is "were these
+    /// bytes canonical?" — which one answers is not a stable distinction.
     #[error(
         "bytes are valid CBOR but not canonical dag-cbor (re-encoding differs from the input)"
     )]

@@ -15,6 +15,43 @@ Two distributions ship from this one repository and share a version:
 The PyPI **distribution** name is `content-addressable` (hyphen); the **import**
 name is `content_addressable` (underscore).
 
+## [Unreleased]
+
+### Changed
+
+- **`serde_ipld_dagcbor` 0.6 → 0.7 — the codec's decoder is now strict, so
+  non-canonical bytes are refused one step earlier.** 0.7 rejects
+  non-spec-compliant DAG-CBOR at *decode* time: unordered or duplicate map keys,
+  indefinite-length items, non-minimal integer/length headers, 32-bit and half
+  floats, `-0.0`, non-42 tags, trailing data. Previously several of these
+  decoded, and `ContentId::from_canonical_bytes_checked` caught them with its
+  re-encode-compare.
+
+  **The guarantee is unchanged: non-canonical bytes never mint an id.** What
+  moved is *which* variant reports the refusal — such input now surfaces as
+  `ContentError::DecodingError` rather than `ContentError::NonCanonical`.
+  Callers that match `ContentError::NonCanonical` specifically to mean "these
+  bytes were not canonical" should match `DecodingError | NonCanonical`.
+  `NonCanonical` is **retained, not deprecated**: it keeps the canonicality
+  guarantee attached to the checked door rather than to whatever the codec
+  enforces in a given release, and it fires for any non-canonical form a future
+  codec admits.
+
+  Every golden vector is byte-identical and no minted identifier changes — this
+  affects the rejection path only. The frozen-`0.1.0` statement of gate #6 is
+  restated at the altitude it always held: the *refusal* is frozen, the variant
+  carrying it is not (`src/lib.md`, `docs/STABILITY.md`).
+
+  Also affects `NodeStoreExt::put_checked` / `put_node` / `get_node`, which
+  route through the same check.
+
+### Fixed
+
+- Tests that established "this fixture is non-canonical" by *decoding* it now
+  prove it by encoding the same value forward through the codec instead. The
+  old form made the fixtures hostage to decoder leniency, which is what broke
+  under 0.7.
+
 ## [0.1.1] — the identity/classification layer
 
 Additive: the frozen `0.1.0` core contract is **untouched**, every golden vector

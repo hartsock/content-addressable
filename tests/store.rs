@@ -21,9 +21,35 @@ fn canonical_map(n: u64) -> Vec<u8> {
     canonical::to_canonical_dagcbor(&ipld).expect("encode canonical")
 }
 
-/// The non-canonical-but-valid-CBOR fixture from the issue-#5 tests: a
-/// two-key map with keys emitted in the wrong (non-canonical) order.
+/// The non-canonical fixture from the issue-#5 tests: a two-key map with keys
+/// emitted in the wrong (non-canonical) order — `{"bb": 1, "a": 2}` spelled
+/// `"bb"`-first, where dag-cbor's length-first-then-bytewise order puts `"a"`
+/// first.
 const NON_CANONICAL: [u8; 8] = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
+
+/// The canonical dag-cbor encoding of the *same value* [`NON_CANONICAL`] spells.
+///
+/// Kept so the fixture's non-canonicality can be proven by encoding the value
+/// forward rather than by decoding the bad bytes — the latter only worked while
+/// the codec's decoder was lenient enough to accept them, which
+/// `serde_ipld_dagcbor` 0.7 no longer is.
+const CANONICAL_FORM: [u8; 8] = [0xa2, 0x61, 0x61, 0x02, 0x62, 0x62, 0x62, 0x01];
+
+/// Assert [`NON_CANONICAL`] really is a non-canonical spelling of the value
+/// whose canonical encoding is [`CANONICAL_FORM`], via the codec's encoder.
+fn assert_fixture_is_really_non_canonical() {
+    let value: ipld_core::ipld::Ipld =
+        serde_json::from_value(serde_json::json!({"bb": 1, "a": 2})).expect("json -> ipld");
+    let canonical = canonical::to_canonical_dagcbor(&value).expect("encode canonical");
+    assert_eq!(
+        canonical, CANONICAL_FORM,
+        "CANONICAL_FORM must be the codec's own canonical encoding of the fixture's value"
+    );
+    assert_ne!(
+        CANONICAL_FORM, NON_CANONICAL,
+        "the fixture must actually be non-canonical, not an accidental canonical form"
+    );
+}
 
 // ---------------------------------------------------------------- PO-STORE-1
 
@@ -309,13 +335,23 @@ fn put_checked_accepts_canonical_and_matches_put() {
 
 #[test]
 fn put_checked_rejects_non_canonical_cbor() {
+    assert_fixture_is_really_non_canonical();
+
     let mut store = MemoryStore::new();
     let err = store
         .put_checked(&NON_CANONICAL)
         .expect_err("non-canonical CBOR must be rejected");
+    // Which arm refuses is a codec detail: serde_ipld_dagcbor 0.6 let these
+    // bytes decode and the re-encode-compare caught them (`NonCanonical`); 0.7
+    // made the decoder strict, so they are refused one step earlier
+    // (`DecodingError`). What `put_checked` owes is the refusal — matching the
+    // tolerance the sibling `put_node` / `get_node` tests below already use.
     assert!(
-        matches!(err, StoreError::Content(ContentError::NonCanonical)),
-        "non-canonical valid CBOR must map to Content(NonCanonical), got {err:?}"
+        matches!(
+            err,
+            StoreError::Content(ContentError::NonCanonical | ContentError::DecodingError { .. })
+        ),
+        "non-canonical bytes must be refused with a typed Content error, got {err:?}"
     );
     assert!(store.is_empty(), "rejected bytes must not be stored");
 }

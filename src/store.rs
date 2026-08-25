@@ -447,9 +447,10 @@ pub trait NodeStoreExt: NodeStore {
     /// # Errors
     ///
     /// - [`StoreError::Content`] wrapping [`ContentError::DecodingError`] (not
-    ///   dag-cbor at all), [`ContentError::NonCanonical`] (valid CBOR, wrong
-    ///   encoding), or [`ContentError::EncodingError`] (the decoded value fails
-    ///   to re-encode) — the full error set of
+    ///   canonical dag-cbor — where the strict codec refuses most non-canonical
+    ///   forms), [`ContentError::NonCanonical`] (decoded, but re-encoding differs
+    ///   — a backstop), or [`ContentError::EncodingError`] (the decoded value
+    ///   fails to re-encode) — the full error set of
     ///   [`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked).
     /// - Any error from the backend [`insert`](NodeStore::insert).
     fn put_checked(&mut self, bytes: &[u8]) -> Result<ContentId, StoreError> {
@@ -497,9 +498,11 @@ pub trait NodeStoreExt: NodeStore {
     /// Everything [`get`](Self::get) can return, plus [`StoreError::Content`]
     /// wrapping, by stage:
     /// - **canonicality check** ([`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked)):
-    ///   [`ContentError::DecodingError`] (not dag-cbor), [`ContentError::NonCanonical`]
-    ///   (valid CBOR, non-canonical), or [`ContentError::EncodingError`] (the generic
-    ///   IPLD re-encode inside the check fails) — distinct from `T::canonical_form`;
+    ///   [`ContentError::DecodingError`] (not canonical dag-cbor — where the strict
+    ///   codec refuses most non-canonical forms), [`ContentError::NonCanonical`]
+    ///   (decoded, but re-encoding differs — a backstop), or
+    ///   [`ContentError::EncodingError`] (the generic IPLD re-encode inside the
+    ///   check fails) — distinct from `T::canonical_form`;
     /// - **typed decode** ([`from_canonical_dagcbor`](canonical::from_canonical_dagcbor)):
     ///   [`ContentError::DecodingError`] if the bytes do not decode as a `T`;
     /// - **`T::canonical_form`**: whatever [`ContentError`] it returns (typically
@@ -515,7 +518,8 @@ pub trait NodeStoreExt: NodeStore {
         // Independently prove the stored bytes are canonical dag-cbor BEFORE trusting
         // any `T` — so the typed guarantee does not lean on `T::canonical_form` being
         // a lawful (canonical) implementation. Non-canonical bytes (however they were
-        // stored) are rejected here as `NonCanonical`, not silently round-tripped.
+        // stored) are rejected here — as `DecodingError` or `NonCanonical`,
+        // depending on which layer catches them — not silently round-tripped.
         ContentId::from_canonical_bytes_checked(&original)?;
         let value: T = canonical::from_canonical_dagcbor(&original)?;
         let reencoded = value.canonical_form()?;
@@ -547,9 +551,11 @@ pub trait NodeStoreExt: NodeStore {
     /// [`canonical_form`](crate::ContentAddressable::canonical_form) (typically
     /// [`ContentError::EncodingError`]); then, from the strict
     /// [`put_checked`](Self::put_checked) canonicality check on that output,
-    /// [`ContentError::DecodingError`] (not dag-cbor), [`ContentError::NonCanonical`]
-    /// (valid CBOR, non-canonical), or [`ContentError::EncodingError`] (the check's
-    /// own re-encode fails); or any error from the backend
+    /// [`ContentError::DecodingError`] (not canonical dag-cbor — where the strict
+    /// codec refuses most non-canonical forms), [`ContentError::NonCanonical`]
+    /// (decoded, but re-encoding differs — a backstop), or
+    /// [`ContentError::EncodingError`] (the check's own re-encode fails); or any
+    /// error from the backend
     /// [`insert`](NodeStore::insert).
     fn put_node<T: ContentAddressable + ?Sized>(
         &mut self,

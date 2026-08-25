@@ -226,12 +226,22 @@ impl ContentId {
     ///
     /// # Errors
     ///
-    /// - [`ContentError::DecodingError`] if `bytes` are not dag-cbor at all.
-    /// - [`ContentError::NonCanonical`] if `bytes` decode but are *not* the
-    ///   canonical encoding (wrong map-key order, indefinite-length items,
-    ///   non-smallest integers, …) — i.e. re-encoding differs from the input.
+    /// - [`ContentError::DecodingError`] if `bytes` are not canonical dag-cbor.
+    ///   This covers non-dag-cbor garbage *and* — since `serde_ipld_dagcbor`
+    ///   0.7 decodes strictly — every non-canonical form the decoder refuses on
+    ///   sight: wrong map-key order, indefinite-length items, non-smallest
+    ///   integers, duplicate keys, non-42 tags.
+    /// - [`ContentError::NonCanonical`] if `bytes` decode but re-encoding differs
+    ///   from the input. Against a strict codec this is a **backstop** that is
+    ///   not expected to fire; it is retained so the guarantee below belongs to
+    ///   this function rather than to the codec's current strictness.
     /// - [`ContentError::EncodingError`] in the unlikely event the decoded value
     ///   cannot be re-encoded.
+    ///
+    /// **Which variant reports a refusal is not part of the frozen contract** —
+    /// that non-canonical bytes never mint an id is. Match
+    /// `DecodingError | NonCanonical` when you mean "the bytes were not
+    /// canonical"; see the [`error`](crate::error) module's operation→variant map.
     pub fn from_canonical_bytes_checked(bytes: &[u8]) -> Result<Self, ContentError> {
         // 1. Decode to the generic Ipld value. Non-dag-cbor garbage fails here.
         let value: ipld_core::ipld::Ipld = crate::canonical::from_canonical_dagcbor(bytes)?;
@@ -935,6 +945,50 @@ mod checked_input_tests {
     use crate::canonical::to_canonical_dagcbor;
     use crate::error::ContentError;
 
+    /// A two-key map whose keys are emitted in NON-canonical (descending) order.
+    ///
+    /// dag-cbor orders map keys length-first, then bytewise, so the canonical
+    /// spelling of `{"a": 2, "bb": 1}` emits `"a"` first. This fixture emits
+    /// `"bb"` first:
+    ///
+    /// ```text
+    ///   a2         map(2)
+    ///   62 6262    text(2) "bb"   <- emitted FIRST (non-canonical)
+    ///   01         1
+    ///   61 61      text(1) "a"
+    ///   02         2
+    /// ```
+    const NON_CANONICAL: [u8; 8] = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
+
+    /// The canonical dag-cbor encoding of the *same value* [`NON_CANONICAL`]
+    /// spells — the same items, with `"a"` first.
+    const CANONICAL_FORM: [u8; 8] = [0xa2, 0x61, 0x61, 0x02, 0x62, 0x62, 0x62, 0x01];
+
+    /// Prove — through the codec, never by decoding the bad bytes — that
+    /// [`NON_CANONICAL`] really is a non-canonical spelling of the value whose
+    /// canonical form is [`CANONICAL_FORM`].
+    ///
+    /// The decode is deliberately absent. Establishing "this fixture is
+    /// non-canonical" by decoding it makes every test that leans on the fixture
+    /// hostage to how strict the codec's decoder happens to be — which is
+    /// exactly what shifted underneath these tests when `serde_ipld_dagcbor`
+    /// went 0.6 → 0.7 and began refusing unordered map keys at the decode step.
+    /// Encoding a known value forward depends only on the encoder, which is
+    /// canonical by construction.
+    fn assert_fixture_is_really_non_canonical() {
+        let value: ipld_core::ipld::Ipld =
+            serde_json::from_value(serde_json::json!({"bb": 1, "a": 2})).expect("json -> ipld");
+        let canonical = to_canonical_dagcbor(&value).expect("encode canonical");
+        assert_eq!(
+            canonical, CANONICAL_FORM,
+            "CANONICAL_FORM must be the codec's own canonical encoding of the fixture's value"
+        );
+        assert_ne!(
+            CANONICAL_FORM, NON_CANONICAL,
+            "the fixture must actually be non-canonical, not an accidental canonical form"
+        );
+    }
+
     #[test]
     fn checked_accepts_canonical_bytes_and_matches_the_unchecked_door() {
         // The always-canonical path: canonicalize a value, then both doors must
@@ -984,37 +1038,29 @@ mod checked_input_tests {
     }
 
     #[test]
-    fn checked_rejects_non_canonical_but_valid_cbor() {
-        // A map with two string keys encoded in NON-canonical (descending) key
-        // order. dag-cbor canonical order is by length-then-bytewise, so {"a",
-        // "bb"} canonical is a2 [a] .. [bb]; we hand-build the reverse order.
-        // Hand-built CBOR:
-        //   a2                      map(2)
-        //   62 6262                 text(2) "bb"   <- emitted FIRST (non-canonical)
-        //   01                      1
-        //   61 61                   text(1) "a"
-        //   02                      2
-        let non_canonical = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
+    fn checked_rejects_non_canonical_bytes() {
+        // The fixture is a genuinely non-canonical encoding of a real value —
+        // established by encoding that value forward, not by decoding these bytes.
+        assert_fixture_is_really_non_canonical();
 
-        // Sanity: it IS valid CBOR (decodes fine), so this exercises the
-        // re-encode-compare path, not the decode path.
-        let decoded: ipld_core::ipld::Ipld =
-            crate::canonical::from_canonical_dagcbor(&non_canonical)
-                .expect("non-canonical bytes are still valid CBOR and decode");
-        // And its canonical re-encoding genuinely differs (proving our fixture is
-        // really non-canonical, not an accidental canonical form).
-        let recanon = to_canonical_dagcbor(&decoded).expect("re-encode");
-        assert_ne!(
-            &recanon[..],
-            &non_canonical[..],
-            "fixture must actually be non-canonical"
-        );
-
-        let err = ContentId::from_canonical_bytes_checked(&non_canonical)
+        let err = ContentId::from_canonical_bytes_checked(&NON_CANONICAL)
             .expect_err("non-canonical CBOR must be rejected");
+
+        // WHICH arm refuses is a codec detail, and it moved. Through
+        // serde_ipld_dagcbor 0.6 these bytes decoded and the re-encode-compare
+        // caught them (`NonCanonical`); 0.7 made the decoder itself strict, so
+        // they are now refused one step earlier, as
+        // `DecodingError { source: UnorderedKey }`. What this test exists to
+        // hold is that the checked door REFUSES — never that a particular
+        // variant reports it. (Same tolerant shape, for the same reason, as
+        // `checked_rejects_indefinite_length_cbor` below.)
         assert!(
-            matches!(err, ContentError::NonCanonical),
-            "non-canonical valid CBOR must map to ContentError::NonCanonical, got {err:?}"
+            matches!(
+                err,
+                ContentError::NonCanonical | ContentError::DecodingError { .. }
+            ),
+            "non-canonical bytes must be refused with a typed error \
+             (NonCanonical or DecodingError), got {err:?}"
         );
     }
 
@@ -1059,25 +1105,24 @@ mod checked_input_tests {
         // unenforced by design: the unchecked door succeeds where the checked one
         // refuses, and the two ids necessarily differ (the unchecked id hashes
         // the non-canonical bytes; the canonical bytes hash to something else).
-        let non_canonical = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
+        assert_fixture_is_really_non_canonical();
 
         // Unchecked: succeeds, no error, no panic — mints over the raw bytes.
-        let misleading = ContentId::from_canonical_bytes(&non_canonical);
+        let misleading = ContentId::from_canonical_bytes(&NON_CANONICAL);
         assert_eq!(
             misleading.digest_bytes(),
-            *blake3::hash(&non_canonical).as_bytes(),
+            *blake3::hash(&NON_CANONICAL).as_bytes(),
             "the unchecked door hashes exactly the bytes it was given"
         );
 
         // Checked: refuses.
-        assert!(ContentId::from_canonical_bytes_checked(&non_canonical).is_err());
+        assert!(ContentId::from_canonical_bytes_checked(&NON_CANONICAL).is_err());
 
         // The misleading id differs from the id of the *canonical* form of the
         // same value — the silent integrity hole the precondition warns about.
-        let decoded: ipld_core::ipld::Ipld =
-            crate::canonical::from_canonical_dagcbor(&non_canonical).expect("valid CBOR");
-        let canonical = to_canonical_dagcbor(&decoded).expect("re-encode");
-        let honest = ContentId::from_canonical_bytes(&canonical);
+        // Taken from CANONICAL_FORM (proven above to be the codec's own output)
+        // rather than by decoding the bad bytes, which a strict codec refuses.
+        let honest = ContentId::from_canonical_bytes(&CANONICAL_FORM);
         assert_ne!(
             misleading, honest,
             "minting over non-canonical bytes names a different id than the \

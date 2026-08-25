@@ -59,8 +59,11 @@ line, where changing them is a major version bump:
 - **Non-canonical input behavior** (gate #6):
   [`ContentId::from_canonical_bytes`] stays the fast, *unchecked* primitive
   with a normative "MUST pass canonical dag-cbor" precondition; the opt-in
-  [`ContentId::from_canonical_bytes_checked`] re-encode-validates foreign
-  bytes and errors with [`ContentError::NonCanonical`].
+  [`ContentId::from_canonical_bytes_checked`] validates foreign bytes and
+  **refuses** non-canonical input instead of minting an id for it. The refusal
+  is what is frozen; the *variant* carrying it is not. A strict codec reports
+  most non-canonical forms as [`ContentError::DecodingError`], leaving
+  [`ContentError::NonCanonical`] a backstop — match both.
 - **Error-variant stability** (gate #7): [`ContentError`] is frozen
   `#[non_exhaustive]` with boxed codec sources and a sourced `InvalidCid`;
   see the [`error`] module docs for the operation→variant map.
