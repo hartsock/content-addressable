@@ -12,10 +12,16 @@
 //! #7) — adding a *new* operation/variant pair later is allowed (the enum is
 //! `#[non_exhaustive]`), but the rows below will not change meaning.
 //!
+//! Rows added since the freeze (the additive path this note reserves):
+//! `from_canonical_dagcbor_checked` in `0.1.2` (issue #90), which is also what
+//! introduced [`LossyDecode`](ContentError::LossyDecode) — the first exercise of
+//! the `#[non_exhaustive]` decision below, and exactly the case it was kept for.
+//!
 //! | Operation | Variant(s) it can return |
 //! |-----------|--------------------------|
 //! | [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor) | [`EncodingError`](ContentError::EncodingError) |
 //! | [`from_canonical_dagcbor`](crate::canonical::from_canonical_dagcbor) | [`DecodingError`](ContentError::DecodingError) |
+//! | [`from_canonical_dagcbor_checked`](crate::canonical::from_canonical_dagcbor_checked) | [`DecodingError`](ContentError::DecodingError) (not dag-cbor, or not a `T`), [`NonCanonical`](ContentError::NonCanonical) (valid but non-canonical bytes), [`LossyDecode`](ContentError::LossyDecode) (the typed decode dropped information), [`EncodingError`](ContentError::EncodingError) (a re-encode failed) |
 //! | [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) | [`DecodingError`](ContentError::DecodingError) (not dag-cbor), [`NonCanonical`](ContentError::NonCanonical) (valid but non-canonical), [`EncodingError`](ContentError::EncodingError) (re-encode failed) |
 //! | [`ContentId::from_bytes`](crate::ContentId::from_bytes) / [`FromStr`](core::str::FromStr) / [`TryFrom<Cid>`](crate::ContentId) / binary `Deserialize` | [`InvalidCid`](ContentError::InvalidCid) (not a CID at all) or [`InvalidCidProfile`](ContentError::InvalidCidProfile) (a valid CID that is not the frozen profile) |
 //! | [`content_id`](crate::ContentAddressable::content_id) | propagates `canonical_form`'s error only (typically [`EncodingError`](ContentError::EncodingError)) |
@@ -136,6 +142,34 @@ pub enum ContentError {
     )]
     NonCanonical,
 
+    /// A typed decode **lost information**: re-encoding the decoded value does
+    /// not reproduce the input bytes.
+    ///
+    /// Returned by
+    /// [`from_canonical_dagcbor_checked`](crate::canonical::from_canonical_dagcbor_checked)
+    /// at its third stage. The bytes were already proven canonical, so they are
+    /// *not* at fault — the **target type** is. `serde` ignores unknown map keys
+    /// by default, so a record carrying a field the type does not name decodes
+    /// cleanly with the field gone; aliases, `#[serde(default)]`, flattening and
+    /// hand-written `Deserialize` impls do the same. The value that came back
+    /// therefore re-encodes to different bytes, and so has a **different**
+    /// [`ContentId`](crate::ContentId) than the bytes it was decoded from. For a
+    /// protocol record the discarded field may have been a required demand.
+    ///
+    /// Distinct from [`NonCanonical`](ContentError::NonCanonical) on purpose:
+    /// `NonCanonical` blames the bytes (re-encode them), `LossyDecode` blames the
+    /// type (widen it, or decode into one that names every field). Like
+    /// `NonCanonical` it is a policy rejection and carries no underlying
+    /// `source` — nothing failed underneath; the comparison simply came out
+    /// unequal.
+    ///
+    /// Added in `0.1.2` (issue #90) under the enum's `#[non_exhaustive]`
+    /// contract.
+    #[error(
+        "the typed decode dropped information: re-encoding the decoded value differs from the input"
+    )]
+    LossyDecode,
+
     /// A CID could not be parsed from a string or from bytes.
     ///
     /// Returned by [`ContentId::from_bytes`](crate::ContentId::from_bytes) and
@@ -186,8 +220,9 @@ mod tests {
     /// Regression guard against future source-stripping (README gate item #7):
     /// `EncodingError`, `DecodingError`, and `InvalidCid` must each carry a live
     /// `#[source]`, so `std::error::Error::source` returns `Some(_)` and the
-    /// error chain is walkable. `VerificationFailed` / `NonCanonical` carry no
-    /// source by design.
+    /// error chain is walkable. `VerificationFailed` / `NonCanonical` /
+    /// `LossyDecode` / `InvalidCidProfile` carry no source by design — they are
+    /// policy rejections, with nothing underneath that failed.
     #[test]
     fn source_chain_is_preserved_for_sourced_variants() {
         use std::error::Error as _;

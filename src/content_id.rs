@@ -233,14 +233,11 @@ impl ContentId {
     /// - [`ContentError::EncodingError`] in the unlikely event the decoded value
     ///   cannot be re-encoded.
     pub fn from_canonical_bytes_checked(bytes: &[u8]) -> Result<Self, ContentError> {
-        // 1. Decode to the generic Ipld value. Non-dag-cbor garbage fails here.
-        let value: ipld_core::ipld::Ipld = crate::canonical::from_canonical_dagcbor(bytes)?;
-        // 2. Re-encode canonically. The codec emits the *unique* canonical form.
-        let reencoded = crate::canonical::to_canonical_dagcbor(&value)?;
-        // 3. The input was canonical iff it equals its own canonical re-encoding.
-        if reencoded != bytes {
-            return Err(ContentError::NonCanonical);
-        }
+        // Decode to the generic Ipld value, re-encode canonically, require byte
+        // equality. That gate lives in ONE place (issue #90) so this door and
+        // `canonical::from_canonical_dagcbor_checked` cannot drift apart in what
+        // they call canonical; the behavior here is unchanged.
+        crate::canonical::ensure_canonical(bytes)?;
         // The bytes are proven canonical: minting over them is identical to the
         // unchecked primitive, so reuse it (no second decode/encode).
         Ok(Self::from_canonical_bytes(bytes))
