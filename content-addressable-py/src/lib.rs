@@ -401,7 +401,15 @@ fn ipld_to_py<'py>(py: Python<'py>, value: &Ipld) -> PyResult<Bound<'py, PyAny>>
 /// not valid canonical dag-cbor.
 #[pyfunction]
 fn from_canonical_dagcbor<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-    // dag-cbor bytes -> serde Ipld value.
+    // dag-cbor bytes -> serde Ipld value. The core's UNVERIFIED door on purpose:
+    // this is the Python mirror of that door, and mirroring it is the whole
+    // contract (the core deprecated it in 0.1.2 to push callers CHOOSING a door,
+    // issue #90; a Python caller choosing this one has already chosen). Decoding
+    // to the generic Ipld model also means the typed-decode hazard cannot arise
+    // here — no field can be dropped when every key is kept — so the only hazard
+    // this door carries is non-canonical input, which is exactly what the checked
+    // sibling refuses.
+    #[allow(deprecated)]
     let value: Ipld = canonical::from_canonical_dagcbor(data)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     // serde Ipld value -> Python object via the hand-written converter (the

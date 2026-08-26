@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_verify() {
-        // A node survives to_canonical_dagcbor -> from_canonical_dagcbor for a
+        // A node survives to_canonical_dagcbor -> from_canonical_dagcbor_checked for a
         // concrete payload, and verify() returns Ok(true) against its own id.
         let parent = id_for("parent");
         let node = MerkleNode::new(event("alice", "hi"), [parent]);
@@ -391,7 +391,7 @@ mod tests {
         );
 
         let bytes = node.canonical_form().unwrap();
-        let back: MerkleNode<Event> = canonical::from_canonical_dagcbor(&bytes).unwrap();
+        let back: MerkleNode<Event> = canonical::from_canonical_dagcbor_checked(&bytes).unwrap();
         assert_eq!(node, back, "a node must survive a dag-cbor roundtrip");
         assert!(
             back.verify(&id).unwrap(),

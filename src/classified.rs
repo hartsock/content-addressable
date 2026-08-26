@@ -448,7 +448,7 @@ mod tests {
             let json = serde_json::to_string(&cid.to_string()).unwrap();
             assert!(serde_json::from_str::<ForeignCid>(&json).is_err());
             let cbor = crate::canonical::to_canonical_dagcbor(&cid).unwrap();
-            assert!(crate::canonical::from_canonical_dagcbor::<ForeignCid>(&cbor).is_err());
+            assert!(crate::canonical::from_canonical_dagcbor_checked::<ForeignCid>(&cbor).is_err());
         }
     }
 
@@ -485,7 +485,7 @@ mod tests {
         let r = ClassifiedCid::from(RawContentId::from_content(b"link me"));
         let cbor = crate::canonical::to_canonical_dagcbor(&r).unwrap();
         assert_eq!(&cbor[..2], &[0xd8, 0x2a], "must be a tag-42 link");
-        let back: ClassifiedCid = crate::canonical::from_canonical_dagcbor(&cbor).unwrap();
+        let back: ClassifiedCid = crate::canonical::from_canonical_dagcbor_checked(&cbor).unwrap();
         assert_eq!(back, r);
         let json = serde_json::to_string(&r).unwrap();
         assert_eq!(serde_json::from_str::<ClassifiedCid>(&json).unwrap(), r);
@@ -495,7 +495,7 @@ mod tests {
         let f = ClassifiedCid::from_cid(sha_cid([9u8; 32]));
         let f_cbor = crate::canonical::to_canonical_dagcbor(&f).unwrap();
         assert_eq!(
-            crate::canonical::from_canonical_dagcbor::<ClassifiedCid>(&f_cbor).unwrap(),
+            crate::canonical::from_canonical_dagcbor_checked::<ClassifiedCid>(&f_cbor).unwrap(),
             f
         );
         let c_cbor = crate::canonical::to_canonical_dagcbor(&ClassifiedCid::from(
@@ -503,7 +503,7 @@ mod tests {
         ))
         .unwrap();
         assert!(matches!(
-            crate::canonical::from_canonical_dagcbor::<ClassifiedCid>(&c_cbor).unwrap(),
+            crate::canonical::from_canonical_dagcbor_checked::<ClassifiedCid>(&c_cbor).unwrap(),
             ClassifiedCid::Content(_)
         ));
     }

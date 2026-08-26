@@ -66,6 +66,10 @@ fn checked_refuses_a_typed_decode_that_drops_a_field() {
 }
 
 #[test]
+// The unverified door is deprecated (issue #90) and is exactly what this test is
+// about: it must keep accepting the bytes the checked door refuses, or the
+// refusal proves nothing.
+#[allow(deprecated)]
 fn unchecked_accepts_the_lossy_bytes_the_checked_decoder_refuses() {
     // The anti-vacuous twin: the bytes are perfectly decodable, so the refusal
     // above is the CHECK talking, not the codec.
@@ -119,6 +123,8 @@ fn checked_refuses_a_non_minimal_integer() {
 }
 
 #[test]
+// Same: the deprecated door is the control arm of the experiment.
+#[allow(deprecated)]
 fn unchecked_accepts_the_non_canonical_bytes_the_checked_decoder_refuses() {
     // Both anti-vacuous twins in one place: these bytes decode, so the refusals
     // above are the canonicality check, not the codec's own strictness. (Codec
@@ -273,4 +279,33 @@ fn content_addressable_stays_dyn_compatible() {
     let boxed: Box<dyn ContentAddressable> = Box::new(Node { alpha: 1 });
     let id = boxed.content_id().expect("content_id through dyn");
     assert!(boxed.verify(&id).expect("verify through dyn"));
+}
+
+// ------------------------------------------------------- the deprecated door
+
+#[test]
+fn the_deprecated_door_points_at_its_successor() {
+    // A deprecation whose note does not name the successor just sends readers
+    // hunting. The note is compile-time metadata with no runtime face, so
+    // guarding the source text is the only way to assert it — the same shape as
+    // tests/stability_doc.rs, which reads Cargo.toml and docs/STABILITY.md.
+    let src = include_str!("../src/canonical.rs");
+    let start = src
+        .find("#[deprecated(")
+        .expect("`from_canonical_dagcbor` must carry a deprecation attribute");
+    let attr = src[start..]
+        .split(")]")
+        .next()
+        .expect("the attribute must terminate")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        attr.contains(r#"since = "0.1.2""#),
+        "the deprecation must state the release that made it: {attr}"
+    );
+    assert!(
+        attr.contains("from_canonical_dagcbor_checked"),
+        "the note must name the successor a caller should move to: {attr}"
+    );
 }

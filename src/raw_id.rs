@@ -386,11 +386,13 @@ mod tests {
         let cbor = crate::canonical::to_canonical_dagcbor(&id).unwrap();
         // dag-cbor tag 42 = 0xd8 0x2a, then a byte string with the 0x00 prefix.
         assert_eq!(&cbor[..2], &[0xd8, 0x2a]);
-        let back: RawContentId = crate::canonical::from_canonical_dagcbor(&cbor).unwrap();
+        let back: RawContentId = crate::canonical::from_canonical_dagcbor_checked(&cbor).unwrap();
         assert_eq!(back, id);
         // A dag-cbor link to a *ContentId* does not deserialize as a RawContentId.
         let dag = ContentId::from_dag_cbor_digest(id.digest_bytes());
         let cbor_dag = crate::canonical::to_canonical_dagcbor(&dag).unwrap();
-        assert!(crate::canonical::from_canonical_dagcbor::<RawContentId>(&cbor_dag).is_err());
+        assert!(
+            crate::canonical::from_canonical_dagcbor_checked::<RawContentId>(&cbor_dag).is_err()
+        );
     }
 }

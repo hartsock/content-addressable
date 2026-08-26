@@ -194,7 +194,8 @@ mod tests {
         assert_eq!(m.reason(), MigrationKind::HashRotated);
         let id1 = m.id().unwrap();
         let bytes = m.canonical_form().unwrap();
-        let back: IdentityMigration = crate::canonical::from_canonical_dagcbor(&bytes).unwrap();
+        let back: IdentityMigration =
+            crate::canonical::from_canonical_dagcbor_checked(&bytes).unwrap();
         assert_eq!(back, m);
         assert_eq!(back.id().unwrap(), id1);
         assert!(m.verify(&id1).unwrap());
@@ -285,7 +286,10 @@ mod tests {
             reason: MigrationKind::HashRotated,
         })
         .unwrap();
-        assert!(crate::canonical::from_canonical_dagcbor::<IdentityMigration>(&crafted).is_err());
+        assert!(
+            crate::canonical::from_canonical_dagcbor_checked::<IdentityMigration>(&crafted)
+                .is_err()
+        );
 
         let crafted_self = crate::canonical::to_canonical_dagcbor(&Craft {
             from: ClassifiedCid::from(raw),
@@ -294,7 +298,8 @@ mod tests {
         })
         .unwrap();
         assert!(
-            crate::canonical::from_canonical_dagcbor::<IdentityMigration>(&crafted_self).is_err()
+            crate::canonical::from_canonical_dagcbor_checked::<IdentityMigration>(&crafted_self)
+                .is_err()
         );
 
         // (e) a valid record still decodes, and to the same id.
@@ -305,7 +310,8 @@ mod tests {
         )
         .unwrap();
         let bytes = good.canonical_form().unwrap();
-        let back: IdentityMigration = crate::canonical::from_canonical_dagcbor(&bytes).unwrap();
+        let back: IdentityMigration =
+            crate::canonical::from_canonical_dagcbor_checked(&bytes).unwrap();
         assert_eq!(back, good);
         assert_eq!(back.id().unwrap(), good.id().unwrap());
     }

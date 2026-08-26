@@ -228,7 +228,7 @@ mod tests {
         use std::error::Error as _;
 
         // A genuine decode error (empty input is not a complete dag-cbor item).
-        let decode_err = crate::canonical::from_canonical_dagcbor::<u64>(&[])
+        let decode_err = crate::canonical::from_canonical_dagcbor_checked::<u64>(&[])
             .expect_err("empty input must fail to decode");
         assert!(
             matches!(decode_err, ContentError::DecodingError { .. }),

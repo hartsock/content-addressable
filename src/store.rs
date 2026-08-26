@@ -478,7 +478,13 @@ pub trait NodeStoreExt: NodeStore {
     /// decode as a `T`.
     fn decode_verified_bytes<T: DeserializeOwned>(&self, id: &ContentId) -> Result<T, StoreError> {
         let bytes = self.get(id)?;
-        canonical::from_canonical_dagcbor(&bytes).map_err(StoreError::from)
+        // The bare decode ON PURPOSE: leniency is this door's whole contract (see
+        // the doc above — it is the weaker sibling of `get_node`, and its `T` need
+        // not even be `ContentAddressable`). It reaches the crate-internal
+        // primitive rather than the deprecated public `from_canonical_dagcbor` so
+        // the deprecation stays a signal to CALLERS choosing a door, not noise
+        // inside the door that documents its own leniency.
+        canonical::decode_dagcbor(&bytes).map_err(StoreError::from)
     }
 
     /// **Identity-preserving** typed read: fetch, decode as a `T`, then require the
@@ -492,16 +498,21 @@ pub trait NodeStoreExt: NodeStore {
     /// *different* bytes, so it is rejected here rather than returned under the wrong
     /// identity.
     ///
+    /// The check itself is
+    /// [`ContentAddressable::from_canonical_form`] (issue #90) — the seam adapts
+    /// its verdict, it does not reimplement it.
+    ///
     /// # Errors
     ///
     /// Everything [`get`](Self::get) can return, plus [`StoreError::Content`]
     /// wrapping, by stage:
-    /// - **canonicality check** ([`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked)):
+    /// - **canonicality check** (the generic gate shared with
+    ///   [`from_canonical_bytes_checked`](ContentId::from_canonical_bytes_checked)):
     ///   [`ContentError::DecodingError`] (not dag-cbor), [`ContentError::NonCanonical`]
     ///   (valid CBOR, non-canonical), or [`ContentError::EncodingError`] (the generic
     ///   IPLD re-encode inside the check fails) — distinct from `T::canonical_form`;
-    /// - **typed decode** ([`from_canonical_dagcbor`](canonical::from_canonical_dagcbor)):
-    ///   [`ContentError::DecodingError`] if the bytes do not decode as a `T`;
+    /// - **typed decode**: [`ContentError::DecodingError`] if the bytes do not
+    ///   decode as a `T`;
     /// - **`T::canonical_form`**: whatever [`ContentError`] it returns (typically
     ///   [`ContentError::EncodingError`]);
     ///
@@ -512,20 +523,17 @@ pub trait NodeStoreExt: NodeStore {
         T: DeserializeOwned + ContentAddressable,
     {
         let original = self.get(id)?;
-        // Independently prove the stored bytes are canonical dag-cbor BEFORE trusting
-        // any `T` — so the typed guarantee does not lean on `T::canonical_form` being
-        // a lawful (canonical) implementation. Non-canonical bytes (however they were
-        // stored) are rejected here as `NonCanonical`, not silently round-tripped.
-        ContentId::from_canonical_bytes_checked(&original)?;
-        let value: T = canonical::from_canonical_dagcbor(&original)?;
-        let reencoded = value.canonical_form()?;
-        if reencoded != original {
-            // Exact byte inequality is the decisive condition (stronger than
-            // comparing CIDs — no collision-resistance assumption): the decoded
-            // value is NOT the one named by `id`.
-            return Err(StoreError::RepresentationMismatch { id: *id });
-        }
-        Ok(value)
+        // The identity-preserving decode is not the seam's to own: it is
+        // `ContentAddressable::from_canonical_form` (issue #90), which proves the
+        // bytes canonical BEFORE trusting any `T` — so the typed guarantee does not
+        // lean on `T::canonical_form` being a lawful (canonical) implementation —
+        // then decodes and re-encodes through `T::canonical_form`, comparing
+        // byte-for-byte. This seam keeps only the last stage's vocabulary: a lossy
+        // round trip is `RepresentationMismatch`, which names the id that lied.
+        T::from_canonical_form(&original).map_err(|e| match e {
+            ContentError::LossyDecode => StoreError::RepresentationMismatch { id: *id },
+            other => StoreError::from(other),
+        })
     }
 
     /// Encode a [`ContentAddressable`] node and store it **strictly**.

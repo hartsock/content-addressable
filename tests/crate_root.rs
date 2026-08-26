@@ -164,7 +164,7 @@ fn verify_and_ensure_agree_and_both_surface_underlying_errors() {
 fn canonical_dagcbor_roundtrip() {
     let a = sample_a();
     let bytes = canonical::to_canonical_dagcbor(&a).unwrap();
-    let back: Sample = canonical::from_canonical_dagcbor(&bytes).unwrap();
+    let back: Sample = canonical::from_canonical_dagcbor_checked(&bytes).unwrap();
     assert_eq!(
         a, back,
         "value must survive a dag-cbor encode/decode roundtrip"

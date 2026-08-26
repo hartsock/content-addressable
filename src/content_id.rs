@@ -994,7 +994,11 @@ mod checked_input_tests {
         let non_canonical = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
 
         // Sanity: it IS valid CBOR (decodes fine), so this exercises the
-        // re-encode-compare path, not the decode path.
+        // re-encode-compare path, not the decode path. The UNVERIFIED door is the
+        // point of the probe — it is what shows the refusal below belongs to the
+        // check and not to the codec — so its deprecation (issue #90) is allowed
+        // here rather than routed around.
+        #[allow(deprecated)]
         let decoded: ipld_core::ipld::Ipld =
             crate::canonical::from_canonical_dagcbor(&non_canonical)
                 .expect("non-canonical bytes are still valid CBOR and decode");
@@ -1071,6 +1075,8 @@ mod checked_input_tests {
 
         // The misleading id differs from the id of the *canonical* form of the
         // same value — the silent integrity hole the precondition warns about.
+        // Same probe, same reason: the unverified door is the subject here.
+        #[allow(deprecated)]
         let decoded: ipld_core::ipld::Ipld =
             crate::canonical::from_canonical_dagcbor(&non_canonical).expect("valid CBOR");
         let canonical = to_canonical_dagcbor(&decoded).expect("re-encode");

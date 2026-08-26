@@ -83,12 +83,60 @@ pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentE
     })
 }
 
-/// Decode a value from canonical dag-cbor bytes.
+/// Decode a value from canonical dag-cbor bytes — **verifying nothing**.
+///
+/// # Deprecated since `0.1.2` (issue #90)
+///
+/// The name is a claim this function never checked. It is a bare
+/// `serde_ipld_dagcbor::from_slice`: it does not verify that `bytes` are the
+/// canonical encoding, and it does not verify that `T` kept what they carried.
+/// Either way the value handed back can re-encode to **different** bytes — and
+/// therefore carry a **different** [`ContentId`](crate::ContentId) than the bytes
+/// it was decoded from — with nothing said. Move to
+/// [`from_canonical_dagcbor_checked`], or to
+/// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form)
+/// when the type is [`ContentAddressable`](crate::ContentAddressable).
+///
+/// Deprecation is not removal: the behavior is unchanged for `0.1.x`, and
+/// removing or redefining the name is a major-version event. It is deprecated
+/// rather than fixed in place because a caller under a zero-warnings policy
+/// should be *told*, at the call site, that they are on the unverified path.
+///
+/// Every remaining honest use is an anti-vacuous probe — showing that some bytes
+/// really do decode, so that a sibling test's refusal is the *check* talking and
+/// not the codec. Those callers say so with a local `#[allow(deprecated)]`:
+///
+/// ```compile_fail
+/// #![deny(deprecated)]
+/// use content_addressable::canonical;
+///
+/// let bytes = canonical::to_canonical_dagcbor(&42u64).unwrap();
+/// // Denied: this door does not verify its own name.
+/// let _: u64 = canonical::from_canonical_dagcbor(&bytes).unwrap();
+/// ```
+///
+/// ```
+/// # #[allow(deprecated)]
+/// # fn main() -> Result<(), content_addressable::ContentError> {
+/// use content_addressable::canonical;
+///
+/// let bytes = canonical::to_canonical_dagcbor(&42u64)?;
+/// let n: u64 = canonical::from_canonical_dagcbor(&bytes)?;
+/// assert_eq!(n, 42);
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// # Errors
 ///
 /// Returns [`ContentError::DecodingError`] if the bytes are not valid canonical
 /// dag-cbor for the target type.
+#[deprecated(
+    since = "0.1.2",
+    note = "does not verify canonical form or a lossless typed decode, so the value it \
+returns can carry a different ContentId than the bytes it came from; use \
+from_canonical_dagcbor_checked (or ContentAddressable::from_canonical_form)"
+)]
 pub fn from_canonical_dagcbor<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ContentError> {
     decode_dagcbor(bytes)
 }
