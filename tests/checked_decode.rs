@@ -21,7 +21,7 @@
 //! that merely observes an error cannot tell whether the check refused the bytes
 //! or the codec did.
 
-use content_addressable::{canonical, ContentError};
+use content_addressable::{canonical, ContentAddressable, ContentError};
 use serde::{Deserialize, Serialize};
 
 /// The shape actually written to the wire: two fields.
@@ -161,4 +161,116 @@ fn checked_reports_non_cbor_garbage_as_a_decoding_error() {
         matches!(err, ContentError::DecodingError { .. }),
         "garbage must stay a DecodingError, got {err:?}"
     );
+}
+
+// ------------------------------------------- the ergonomic path is the safe one
+
+/// A [`ContentAddressable`] whose canonical form IS its dag-cbor encoding — the
+/// recommended one-line implementation.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Node {
+    alpha: u64,
+}
+
+impl ContentAddressable for Node {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(self)
+    }
+}
+
+/// A [`ContentAddressable`] whose canonical form is deterministic but is **not**
+/// its serde encoding: it wraps the value in an envelope. Its serde round trip is
+/// perfectly faithful, so only a check that re-encodes through `canonical_form`
+/// — the function that actually defines this type's identity — can see that the
+/// bytes do not name it.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Enveloped {
+    alpha: u64,
+}
+
+impl ContentAddressable for Enveloped {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(&("envelope", self.alpha))
+    }
+}
+
+#[test]
+fn from_canonical_form_refuses_a_decode_that_drops_a_field() {
+    let bytes = wire_with_extra_field();
+    let err = Node::from_canonical_form(&bytes)
+        .expect_err("the trait's decode must refuse a lossy round trip too");
+    assert!(
+        matches!(err, ContentError::LossyDecode),
+        "the ergonomic path must be the safe one, got {err:?}"
+    );
+}
+
+#[test]
+fn from_canonical_form_refuses_non_canonical_bytes() {
+    let err = Node::from_canonical_form(&REORDERED_KEYS)
+        .expect_err("non-canonical bytes must be refused before any T is trusted");
+    assert!(
+        matches!(err, ContentError::NonCanonical),
+        "the bytes are to blame here, got {err:?}"
+    );
+}
+
+#[test]
+fn from_canonical_form_returns_a_value_named_by_the_bytes() {
+    // The guarantee, stated as an equation: what comes back re-derives the very
+    // identity the bytes have. That is the whole point of the door.
+    let bytes = canonical::to_canonical_dagcbor(&Node { alpha: 7 }).expect("encode");
+    let node = Node::from_canonical_form(&bytes).expect("a faithful round trip is accepted");
+    assert_eq!(node, Node { alpha: 7 });
+    assert_eq!(
+        node.content_id().expect("content_id"),
+        content_addressable::ContentId::from_canonical_bytes(&bytes),
+        "from_canonical_form(b) must return the value that b NAMES"
+    );
+}
+
+#[test]
+fn from_canonical_form_re_encodes_through_canonical_form_not_serde() {
+    // `Enveloped`'s serde round trip is faithful, so a check that re-encoded with
+    // `to_canonical_dagcbor` would accept these bytes and hand back a value whose
+    // content_id is something else entirely. Re-encoding through `canonical_form`
+    // is what refuses them.
+    let serde_bytes = canonical::to_canonical_dagcbor(&Enveloped { alpha: 7 }).expect("encode");
+    // Anti-vacuous twin: the serde round trip really is faithful.
+    assert_eq!(
+        canonical::from_canonical_dagcbor_checked::<Enveloped>(&serde_bytes)
+            .expect("the serde-level checked decode accepts these bytes"),
+        Enveloped { alpha: 7 },
+    );
+    let err = Enveloped::from_canonical_form(&serde_bytes)
+        .expect_err("these bytes do not name an Enveloped");
+    assert!(
+        matches!(err, ContentError::LossyDecode),
+        "the trait door must re-encode through canonical_form, got {err:?}"
+    );
+
+    // ...and the bytes that DO name one are accepted.
+    let own = Enveloped { alpha: 7 }
+        .canonical_form()
+        .expect("canonical_form");
+    // (Its own canonical form is an envelope, which does not decode as the
+    // struct — so this type simply has no readable canonical form. That is a
+    // property of the type, correctly reported, not of the door.)
+    assert!(
+        matches!(
+            Enveloped::from_canonical_form(&own),
+            Err(ContentError::DecodingError { .. })
+        ),
+        "an envelope does not decode as the struct — a DecodingError, not a silent value"
+    );
+}
+
+#[test]
+fn content_addressable_stays_dyn_compatible() {
+    // `from_canonical_form` takes no `self` and would leave the vtable, so it
+    // carries `where Self: Sized`. Lock that: `Box<dyn ContentAddressable>` is
+    // an advertised form (`NodeStoreExt::put_node` takes `T: ... + ?Sized`).
+    let boxed: Box<dyn ContentAddressable> = Box::new(Node { alpha: 1 });
+    let id = boxed.content_id().expect("content_id through dyn");
+    assert!(boxed.verify(&id).expect("verify through dyn"));
 }

@@ -49,6 +49,7 @@
 //! |------|----------|----------|
 //! | [`from_canonical_dagcbor`] (**deprecated**) | nothing | never — see its successors |
 //! | [`from_canonical_dagcbor_checked`] | canonical bytes **and** a lossless typed round trip | any `Serialize + Deserialize` value |
+//! | [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form) | the same, re-encoding through the type's own `canonical_form` | the value is [`ContentAddressable`](crate::ContentAddressable) |
 //! | [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) | canonical bytes only (generic `Ipld`, no type involved) | you want the *id* of foreign bytes, not a value |
 //!
 //! The `_checked` suffix follows the frozen
@@ -168,6 +169,11 @@ pub(crate) fn ensure_canonical(bytes: &[u8]) -> Result<(), ContentError> {
 /// The cost is one generic decode + re-encode plus one typed decode + re-encode
 /// per call. Pay it when the byte provenance is not yours; when you produced the
 /// bytes yourself, you already know the answer.
+///
+/// If `T` implements [`ContentAddressable`](crate::ContentAddressable), prefer
+/// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form),
+/// which runs stage 3 through the type's own `canonical_form` — the function
+/// that actually defines its identity.
 ///
 /// # Examples
 ///

@@ -6,6 +6,9 @@
 //! deterministic byte representation. Everything else — computing the
 //! [`ContentId`] and verifying against an expected id — is provided.
 
+use serde::de::DeserializeOwned;
+
+use crate::canonical;
 use crate::content_id::ContentId;
 use crate::error::ContentError;
 
@@ -129,5 +132,96 @@ pub trait ContentAddressable {
                 computed: computed.to_string(),
             })
         }
+    }
+
+    /// Decode a value from canonical dag-cbor bytes, **proving the bytes name
+    /// it** — the inverse of [`canonical_form`](Self::canonical_form).
+    ///
+    /// This is the safe ingress for bytes you did not produce: foreign, stored,
+    /// or off the wire. It guarantees the equation a bare decode does not —
+    ///
+    /// ```text
+    /// T::from_canonical_form(b)?.content_id()? == ContentId::from_canonical_bytes(b)
+    /// ```
+    ///
+    /// — so the value you end up holding carries the identity it arrived under,
+    /// rather than a different one nothing told you about.
+    ///
+    /// Three stages, each blaming a different party:
+    ///
+    /// 1. **Canonicality** — the bytes are canonical dag-cbor. Established
+    ///    generically, *before* any `Self` is trusted, so the guarantee does not
+    ///    lean on this type's serde impl being well behaved. Blames the **bytes**
+    ///    ([`ContentError::NonCanonical`]).
+    /// 2. **Typed decode** — the bytes decode as a `Self`. Blames the
+    ///    **bytes/type pair** ([`ContentError::DecodingError`]).
+    /// 3. **Forward re-encode** — [`canonical_form`](Self::canonical_form) on the
+    ///    decoded value reproduces the input byte-for-byte. Blames the **type**
+    ///    ([`ContentError::LossyDecode`]): it decoded, but did not keep
+    ///    everything the bytes carried.
+    ///
+    /// Stage 3 re-encodes through `canonical_form` rather than through
+    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor)
+    /// deliberately: `canonical_form` is the function that *defines* this type's
+    /// identity, so it is the only re-encode whose equality proves the equation
+    /// above. For the recommended one-line implementation the two coincide; for a
+    /// type with its own canonical form they do not, and only this one is sound.
+    /// Exact byte equality is likewise stronger than comparing the two
+    /// [`ContentId`]s — it assumes no collision resistance.
+    ///
+    /// Use [`canonical::from_canonical_dagcbor_checked`] for a plain `Serialize + Deserialize` value that is not
+    /// `ContentAddressable`. Added in `0.1.2` (issue #90) as a defaulted method,
+    /// so every implementor gets it for free; it carries `where Self: Sized`, so
+    /// the trait stays dyn-compatible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use content_addressable::{canonical, ContentAddressable, ContentError, ContentId};
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    /// struct Record { name: String }
+    ///
+    /// impl ContentAddressable for Record {
+    ///     fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+    ///         canonical::to_canonical_dagcbor(self)
+    ///     }
+    /// }
+    ///
+    /// let bytes = Record { name: "alpha".into() }.canonical_form()?;
+    /// let back = Record::from_canonical_form(&bytes)?;
+    ///
+    /// // The value that came back is the one those bytes name.
+    /// assert_eq!(back.content_id()?, ContentId::from_canonical_bytes(&bytes));
+    /// # Ok::<(), ContentError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`ContentError::NonCanonical`] — the bytes are valid CBOR but not the
+    ///   canonical encoding.
+    /// - [`ContentError::DecodingError`] — the bytes are not dag-cbor, or do not
+    ///   decode as a `Self`.
+    /// - [`ContentError::LossyDecode`] — the decode dropped information: the
+    ///   decoded value's `canonical_form` differs from the input.
+    /// - [`ContentError::EncodingError`] — propagated from
+    ///   [`canonical_form`](Self::canonical_form).
+    fn from_canonical_form(bytes: &[u8]) -> Result<Self, ContentError>
+    where
+        Self: DeserializeOwned + Sized,
+    {
+        // 1. The bytes are canonical — proven generically, so this does not rely
+        //    on `Self::canonical_form` being a lawful (canonical) implementation.
+        canonical::ensure_canonical(bytes)?;
+        // 2. They decode as a `Self`.
+        let value: Self = canonical::decode_dagcbor(bytes)?;
+        // 3. …and re-encoding through the function that defines this type's
+        //    identity reproduces them exactly. Inequality is decisive: the value
+        //    is NOT the one these bytes name.
+        if value.canonical_form()? != bytes {
+            return Err(ContentError::LossyDecode);
+        }
+        Ok(value)
     }
 }
