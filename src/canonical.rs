@@ -116,7 +116,10 @@ pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentE
 /// #![deny(deprecated)]
 /// use content_addressable::canonical;
 ///
-/// let bytes = canonical::to_canonical_dagcbor(&42u64).unwrap();
+/// // A literal, not `to_canonical_dagcbor(&42u64)`: this block must contain
+/// // exactly ONE deprecatable call, or a future deprecation elsewhere in the
+/// // crate could satisfy `compile_fail` in its place.
+/// let bytes = [0x18u8, 0x2a]; // canonical dag-cbor for 42
 /// // Denied: this door does not verify its own name.
 /// let _: u64 = canonical::from_canonical_dagcbor(&bytes).unwrap();
 /// ```

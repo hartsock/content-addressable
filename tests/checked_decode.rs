@@ -289,14 +289,33 @@ fn the_deprecated_door_points_at_its_successor() {
     // hunting. The note is compile-time metadata with no runtime face, so
     // guarding the source text is the only way to assert it — the same shape as
     // tests/stability_doc.rs, which reads Cargo.toml and docs/STABILITY.md.
+    //
+    // Anchored to the FUNCTION, not to the first `#[deprecated(` in the file: a
+    // second deprecated item added above would otherwise silently become what
+    // this test checks, and renaming the door away would leave it checking that
+    // other item's note. Three things can fail here, and each is a real signal.
+    const DOOR: &str = "pub fn from_canonical_dagcbor<T: DeserializeOwned>(";
     let src = include_str!("../src/canonical.rs");
-    let start = src
-        .find("#[deprecated(")
+    let door = src
+        .find(DOOR)
+        .expect("the deprecated door must still exist under this exact signature");
+    let before = &src[..door];
+    let start = before
+        .rfind("#[deprecated(")
         .expect("`from_canonical_dagcbor` must carry a deprecation attribute");
-    let attr = src[start..]
-        .split(")]")
-        .next()
-        .expect("the attribute must terminate")
+    let end = before[start..]
+        .find(")]")
+        .map(|i| start + i)
+        .expect("the attribute must terminate");
+    // Nothing but doc comments and other attributes may sit between the two, or
+    // the attribute we found belongs to some other item.
+    let between = &before[end + 2..];
+    assert!(
+        !between.contains("fn ") && !between.contains("struct ") && !between.contains("enum "),
+        "the nearest #[deprecated(…) is not attached to {DOOR}; found an item between them: \
+         {between:?}"
+    );
+    let attr = before[start..end]
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
