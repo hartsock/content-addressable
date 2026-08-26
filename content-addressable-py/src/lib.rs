@@ -16,8 +16,11 @@
 //!   dag-cbor profile) with the same presentation forms. The two never compare
 //!   equal, even on identical digests — the codec is part of the identity
 //!   (issue #84).
-//! - [`to_canonical_dagcbor`] / [`from_canonical_dagcbor`] — the canonical
-//!   dag-cbor codec, applied to native Python values.
+//! - [`to_canonical_dagcbor`] / [`from_canonical_dagcbor`] /
+//!   [`from_canonical_dagcbor_checked`] — the canonical dag-cbor codec, applied
+//!   to native Python values. The plain decode is **unverified**; the `_checked`
+//!   one refuses bytes that are not the canonical encoding of what they decode
+//!   to (issue #90), mirroring the core's pairing.
 //! - [`content_id`] — `ContentId.from_canonical_bytes(to_canonical_dagcbor(x))`.
 //!
 //! Canonicalization and hashing are delegated to the core crate; the only work
@@ -418,6 +421,43 @@ fn from_canonical_dagcbor<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'
     ipld_to_py(py, &value)
 }
 
+/// Decode canonical dag-cbor bytes, **first verifying they are canonical**.
+///
+/// The checked sibling of [`from_canonical_dagcbor`], and the door to use for
+/// bytes that did not come from [`to_canonical_dagcbor`] in this process:
+/// foreign, stored, or off the wire. It guarantees what the plain decode does
+/// not — that the value handed back re-encodes to *exactly* the input bytes, and
+/// so carries the same [`ContentId`] they do:
+///
+///     content_id(from_canonical_dagcbor_checked(b)) == ContentId.from_canonical_bytes(b)
+///
+/// Valid-but-non-canonical CBOR (reordered map keys, non-minimal integers,
+/// indefinite lengths) decodes perfectly well and re-encodes *differently*, so
+/// the plain decode silently hands back a value whose identity is not the one it
+/// arrived under. That is what this refuses.
+///
+/// Raises `ValueError` if the bytes are not dag-cbor at all, or are valid CBOR
+/// but not its canonical encoding.
+///
+/// The core crate's third failure mode — a *typed* decode dropping a field the
+/// target type does not name — cannot arise here: Python decodes into the
+/// generic data model (`dict`/`list`/`int`/…), which keeps every key. There is no
+/// Python analogue of `ContentError::LossyDecode`, and `tests/` pins that as a
+/// property rather than leaving it assumed.
+#[pyfunction]
+fn from_canonical_dagcbor_checked<'py>(
+    py: Python<'py>,
+    data: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    // Delegated to the core crate's checked decoder — the SAME function the Rust
+    // face calls — so the two languages cannot disagree about what is canonical.
+    // `T = Ipld` here, so its typed re-encode stage coincides with its generic
+    // canonicality stage; the only reachable refusal is a non-canonical input.
+    let value: Ipld = canonical::from_canonical_dagcbor_checked(data)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    ipld_to_py(py, &value)
+}
+
 /// Compute the [`ContentId`] of a native Python value.
 ///
 /// Equivalent to
@@ -448,6 +488,7 @@ fn content_addressable(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRawContentId>()?;
     m.add_function(wrap_pyfunction!(to_canonical_dagcbor, m)?)?;
     m.add_function(wrap_pyfunction!(from_canonical_dagcbor, m)?)?;
+    m.add_function(wrap_pyfunction!(from_canonical_dagcbor_checked, m)?)?;
     m.add_function(wrap_pyfunction!(content_id, m)?)?;
     Ok(())
 }
