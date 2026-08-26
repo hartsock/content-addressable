@@ -59,6 +59,7 @@ named to say so.
 | `unstable-migration` feature | No | **Experimental** — `IdentityMigration` record (from → to, reason); field names NOT frozen |
 
 [#84]: https://github.com/hartsock/content-addressable/issues/84
+[#90]: https://github.com/hartsock/content-addressable/issues/90
 
 Details and rationale: [`docs/STABILITY.md`](docs/STABILITY.md).
 
@@ -174,12 +175,40 @@ precondition — it is **not** universally safe.
 |----------|---------------------|----------|
 | Hash a normal value | `value.content_id()` / `content_id(value)` | **Preferred safe path** |
 | Encode a value to bytes | `canonical::to_canonical_dagcbor(v)` / `to_canonical_dagcbor(v)` | Produces canonical DAG-CBOR |
-| Accept foreign / untrusted bytes | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: *no single checked constructor yet* | Validates DAG-CBOR canonicality; errors on non-canonical |
+| Accept foreign / untrusted bytes (id only) | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: `content_id(from_canonical_dagcbor_checked(b))` | Validates DAG-CBOR canonicality; errors on non-canonical |
 | Hash already-trusted canonical bytes | `ContentId::from_canonical_bytes(b)` | **Unchecked** precondition: caller asserts `b` is canonical DAG-CBOR |
 | Identify opaque bytes (a file, chunk, binary, payload) | `RawContentId::from_content(b)` / `RawContentId.from_content(b)` | Hashes the bytes; nothing to get wrong — the bytes *are* the content |
 | Wrap an existing BLAKE3 digest **of opaque bytes** | `RawContentId::from_blake3_digest(d)` / `RawContentId.from_blake3_digest(d)` | No rehash; the honest home of the no-rehash bridge (byte-identical to kyln raw CIDs / bare `blake3` digests) |
 | Wrap an existing BLAKE3 digest **known to be over canonical DAG-CBOR** | `ContentId::from_dag_cbor_digest(d)` / `ContentId.from_dag_cbor_digest(d)` | No rehash; the name asserts the precondition. `from_blake3_content_digest` is **deprecated** in its favor ([#84]): it stamped DAG-CBOR on a digest it could not know came from DAG-CBOR |
 | Hold a CID you did not mint (REAPI `sha2-256`, CIDv0, …) | `ClassifiedCid::from_str` / `ClassifiedCid::from_bytes` / `ClassifiedCid::from_cid` | Classifies as `Content` / `Raw` / `Foreign`; foreign ids are carried and compared, never minted |
+
+## Decoding foreign bytes
+
+Encoding is safe by construction. **Decoding is not.** A plain `serde` decode
+hands back a value that may re-encode to *different* bytes — and so carry a
+**different** `ContentId` than the bytes it was decoded from — with nothing
+said. Two independent causes:
+
+1. **The bytes were not canonical.** Reordered map keys, non-minimal integers,
+   indefinite lengths: valid CBOR, not canonical DAG-CBOR. They decode, and
+   re-encode differently.
+2. **The type dropped what it does not name.** `serde` ignores unknown map keys,
+   so a record carrying a field your type has no place for decodes cleanly *with
+   the field gone*. For a protocol record that may have been a required demand.
+
+Cause 2 is invisible to `from_canonical_bytes_checked`, which re-encodes as
+generic IPLD and therefore keeps every key — only a **typed** round trip sees it.
+
+| Use case | API (Rust / Python) | Contract |
+|----------|---------------------|----------|
+| Decode foreign bytes into a `ContentAddressable` type | `T::from_canonical_form(b)` / — | Canonical bytes **and** `canonical_form` reproduces them: the value is provably the one `b` names |
+| Decode foreign bytes into any `Serialize + Deserialize` type | `canonical::from_canonical_dagcbor_checked::<T>(b)` / `from_canonical_dagcbor_checked(b)` | Canonical bytes **and** a lossless serde round trip |
+| Decode bytes you just encoded yourself | `canonical::from_canonical_dagcbor(b)` / `from_canonical_dagcbor(b)` | **Deprecated (Rust, 0.1.2)** — verifies neither of the above |
+
+A failed check names the party at fault: `ContentError::NonCanonical` blames the
+bytes, `ContentError::LossyDecode` blames the type. In Python only the first is
+reachable — decoding into `dict`/`list` keeps every key, so no field can be
+dropped ([#90]).
 
 ## Presentation forms
 

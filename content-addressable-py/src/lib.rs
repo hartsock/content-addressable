@@ -398,10 +398,18 @@ fn ipld_to_py<'py>(py: Python<'py>, value: &Ipld) -> PyResult<Bound<'py, PyAny>>
     }
 }
 
-/// Decode canonical dag-cbor bytes back into a native Python value.
+/// Decode dag-cbor bytes back into a native Python value — **verifying nothing**.
 ///
-/// Inverse of [`to_canonical_dagcbor`]. Raises `ValueError` if the bytes are
-/// not valid canonical dag-cbor.
+/// Inverse of [`to_canonical_dagcbor`] for bytes that door produced. Raises
+/// `ValueError` if the bytes are not valid dag-cbor.
+///
+/// It does **not** verify that they are the CANONICAL encoding, despite the
+/// name — valid-but-non-canonical CBOR (reordered map keys, non-minimal
+/// integers) decodes here and re-encodes to *different* bytes, so the value you
+/// get back has a different content id than the bytes it came from, and nothing
+/// says so. (Before `0.1.2` this docstring claimed the check; it never ran.)
+/// For bytes you did not encode yourself, use
+/// [`from_canonical_dagcbor_checked`], which refuses exactly that.
 #[pyfunction]
 fn from_canonical_dagcbor<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyAny>> {
     // dag-cbor bytes -> serde Ipld value. The core's UNVERIFIED door on purpose:

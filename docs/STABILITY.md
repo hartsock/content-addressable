@@ -51,6 +51,19 @@ returns the typed `ContentError::NonCanonical` (or `DecodingError` for non-DAG-C
 The pairing is frozen as `from_canonical_bytes` / `from_canonical_bytes_checked`
 — the unchecked door is **not** renamed to `_unchecked`.
 
+**The same pairing extended to decoding** (`0.1.2`, [#90]), additively.
+`canonical::from_canonical_dagcbor_checked` and the defaulted
+`ContentAddressable::from_canonical_form` verify a *typed* round trip — the bytes
+are canonical, and re-encoding the decoded value reproduces them exactly — so the
+value a caller ends up holding provably carries the identity the bytes have.
+`from_canonical_bytes_checked` cannot substitute: it re-encodes as generic IPLD,
+which keeps every key, so a typed decode dropping an unknown field is structurally
+invisible to it. The bare `canonical::from_canonical_dagcbor` is **deprecated**;
+its behavior is unchanged for `0.1.x` and removing it is a major-version event.
+`ContentError::LossyDecode` was **added** under the enum's `#[non_exhaustive]`
+contract — the first use of the additive path the error policy below reserves.
+Adding to the frozen surface is allowed; nothing above was narrowed.
+
 ### Presentation contract ([#6])
 
 A `ContentId` names four distinct presentation forms, each frozen:
@@ -248,3 +261,4 @@ long-lived identity claims.
 [#10]: https://github.com/hartsock/content-addressable/issues/10
 [#71]: https://github.com/hartsock/content-addressable/issues/71
 [#84]: https://github.com/hartsock/content-addressable/issues/84
+[#90]: https://github.com/hartsock/content-addressable/issues/90
