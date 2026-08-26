@@ -104,7 +104,13 @@ pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentE
 ///
 /// Every remaining honest use is an anti-vacuous probe — showing that some bytes
 /// really do decode, so that a sibling test's refusal is the *check* talking and
-/// not the codec. Those callers say so with a local `#[allow(deprecated)]`:
+/// not the codec. Those callers say so with a local `#[allow(deprecated)]`.
+///
+/// The two examples below are a pair, and only the pair is non-vacuous: a
+/// `compile_fail` block passes when compilation fails for *any* reason, so on its
+/// own it would keep passing if this function were renamed away. The second block
+/// must compile, which pins the function's continued existence; the first must
+/// not, which pins the attribute.
 ///
 /// ```compile_fail
 /// #![deny(deprecated)]
