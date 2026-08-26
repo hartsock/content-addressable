@@ -13,15 +13,17 @@
 //! `#[non_exhaustive]`), but the rows below will not change meaning.
 //!
 //! Rows added since the freeze (the additive path this note reserves):
-//! `from_canonical_dagcbor_checked` in `0.1.2` (issue #90), which is also what
-//! introduced [`LossyDecode`](ContentError::LossyDecode) — the first exercise of
-//! the `#[non_exhaustive]` decision below, and exactly the case it was kept for.
+//! `from_canonical_dagcbor_checked` and `ContentAddressable::from_canonical_form`
+//! in `0.1.2` (issue #90), which is also what introduced
+//! [`LossyDecode`](ContentError::LossyDecode) — the first exercise of the
+//! `#[non_exhaustive]` decision below, and exactly the case it was kept for.
 //!
 //! | Operation | Variant(s) it can return |
 //! |-----------|--------------------------|
 //! | [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor) | [`EncodingError`](ContentError::EncodingError) |
 //! | [`from_canonical_dagcbor`](crate::canonical::from_canonical_dagcbor) | [`DecodingError`](ContentError::DecodingError) |
 //! | [`from_canonical_dagcbor_checked`](crate::canonical::from_canonical_dagcbor_checked) | [`DecodingError`](ContentError::DecodingError) (not dag-cbor, or not a `T`), [`NonCanonical`](ContentError::NonCanonical) (valid but non-canonical bytes), [`LossyDecode`](ContentError::LossyDecode) (the typed decode dropped information), [`EncodingError`](ContentError::EncodingError) (a re-encode failed) |
+//! | [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form) | the same four, with the last two arising from [`canonical_form`](crate::ContentAddressable::canonical_form) rather than from `to_canonical_dagcbor` — plus anything else a custom `canonical_form` returns, propagated verbatim |
 //! | [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) | [`DecodingError`](ContentError::DecodingError) (not dag-cbor), [`NonCanonical`](ContentError::NonCanonical) (valid but non-canonical), [`EncodingError`](ContentError::EncodingError) (re-encode failed) |
 //! | [`ContentId::from_bytes`](crate::ContentId::from_bytes) / [`FromStr`](core::str::FromStr) / [`TryFrom<Cid>`](crate::ContentId) / binary `Deserialize` | [`InvalidCid`](ContentError::InvalidCid) (not a CID at all) or [`InvalidCidProfile`](ContentError::InvalidCidProfile) (a valid CID that is not the frozen profile) |
 //! | [`content_id`](crate::ContentAddressable::content_id) | propagates `canonical_form`'s error only (typically [`EncodingError`](ContentError::EncodingError)) |

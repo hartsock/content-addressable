@@ -174,6 +174,14 @@ pub trait ContentAddressable {
     /// so every implementor gets it for free; it carries `where Self: Sized`, so
     /// the trait stays dyn-compatible.
     ///
+    /// # Overriding
+    ///
+    /// Like [`content_id`](Self::content_id), override this only if you have a
+    /// path that is *provably identical*. An override that skips a stage does
+    /// **not** weaken the store seam — `NodeStoreExt::get_node` deliberately runs
+    /// the shared body rather than this method, so a `T` cannot hand itself a
+    /// pass — but it does weaken every direct caller of `T::from_canonical_form`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -211,17 +219,62 @@ pub trait ContentAddressable {
     where
         Self: DeserializeOwned + Sized,
     {
-        // 1. The bytes are canonical — proven generically, so this does not rely
-        //    on `Self::canonical_form` being a lawful (canonical) implementation.
-        canonical::ensure_canonical(bytes)?;
-        // 2. They decode as a `Self`.
-        let value: Self = canonical::decode_dagcbor(bytes)?;
-        // 3. …and re-encoding through the function that defines this type's
-        //    identity reproduces them exactly. Inequality is decisive: the value
-        //    is NOT the one these bytes name.
-        if value.canonical_form()? != bytes {
-            return Err(ContentError::LossyDecode);
+        match checked_decode::<Self>(bytes)? {
+            CheckedDecode::Value(value) => Ok(value),
+            CheckedDecode::Lossy => Err(ContentError::LossyDecode),
         }
-        Ok(value)
     }
+}
+
+/// The verdict of [`checked_decode`].
+///
+/// The lossy case is a **value, not an error**, for two reasons. It lets each
+/// caller name the verdict in its own vocabulary (the store seam calls it
+/// `RepresentationMismatch`, which can point at the id that lied). And it keeps a
+/// [`ContentError::LossyDecode`] that came out of the *caller's own*
+/// `canonical_form` distinguishable from this function's own byte comparison — an
+/// error value alone could not tell the two apart, and the seam would blame the
+/// stored bytes for a failure inside the type's encoder.
+pub(crate) enum CheckedDecode<T> {
+    /// The bytes decoded as a `T` whose `canonical_form` reproduces them exactly.
+    Value(T),
+    /// The decode succeeded but lost information: the decoded value's
+    /// `canonical_form` differs from the input bytes.
+    Lossy,
+}
+
+/// The crate's one identity-preserving decode: canonical bytes, a typed decode,
+/// and a forward re-encode through the type's own `canonical_form`.
+///
+/// This is the body of [`ContentAddressable::from_canonical_form`], factored out
+/// so the **store seam can run it without going through that method**.
+/// `from_canonical_form` is defaulted on an unsealed trait, so a downstream `T`
+/// can override it — including with a bare, unverified decode. A seam whose
+/// integrity guarantee routed through it would be handing that guarantee to `T`,
+/// which is precisely the bug class this line of work exists to close. Stage 3
+/// necessarily consults `T::canonical_form` (that is what identity *means* for a
+/// `ContentAddressable`); stages 1 and 2 must not.
+///
+/// # Errors
+///
+/// [`ContentError::NonCanonical`], [`ContentError::DecodingError`] and
+/// [`ContentError::EncodingError`] from the three stages, in that order. Whatever
+/// `canonical_form` returns is propagated **verbatim** — the lossy verdict
+/// travels as `Ok(`[`CheckedDecode::Lossy`]`)`, never as an error.
+pub(crate) fn checked_decode<T>(bytes: &[u8]) -> Result<CheckedDecode<T>, ContentError>
+where
+    T: DeserializeOwned + ContentAddressable,
+{
+    // 1. The bytes are canonical — proven generically, so this does not rely on
+    //    `T::canonical_form` being a lawful (canonical) implementation.
+    canonical::ensure_canonical(bytes)?;
+    // 2. They decode as a `T`.
+    let value: T = canonical::decode_dagcbor(bytes)?;
+    // 3. …and re-encoding through the function that defines this type's identity
+    //    reproduces them exactly. Inequality is decisive: the value is NOT the one
+    //    these bytes name.
+    if value.canonical_form()? != bytes {
+        return Ok(CheckedDecode::Lossy);
+    }
+    Ok(CheckedDecode::Value(value))
 }

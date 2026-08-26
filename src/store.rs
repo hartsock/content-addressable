@@ -153,7 +153,7 @@ use serde::de::DeserializeOwned;
 use crate::canonical;
 use crate::content_id::ContentId;
 use crate::error::ContentError;
-use crate::trait_def::ContentAddressable;
+use crate::trait_def::{checked_decode, CheckedDecode, ContentAddressable};
 
 /// Store-layer errors.
 ///
@@ -498,9 +498,11 @@ pub trait NodeStoreExt: NodeStore {
     /// *different* bytes, so it is rejected here rather than returned under the wrong
     /// identity.
     ///
-    /// The check itself is
-    /// [`ContentAddressable::from_canonical_form`] (issue #90) — the seam adapts
-    /// its verdict, it does not reimplement it.
+    /// The check is the same three stages
+    /// [`ContentAddressable::from_canonical_form`] performs (issue #90), sharing
+    /// one implementation with it — but this seam runs that shared body directly
+    /// rather than calling the trait method, which is *defaulted* and therefore
+    /// overridable. A `T` cannot hand itself a pass here.
     ///
     /// # Errors
     ///
@@ -523,17 +525,26 @@ pub trait NodeStoreExt: NodeStore {
         T: DeserializeOwned + ContentAddressable,
     {
         let original = self.get(id)?;
-        // The identity-preserving decode is not the seam's to own: it is
-        // `ContentAddressable::from_canonical_form` (issue #90), which proves the
-        // bytes canonical BEFORE trusting any `T` — so the typed guarantee does not
-        // lean on `T::canonical_form` being a lawful (canonical) implementation —
-        // then decodes and re-encodes through `T::canonical_form`, comparing
-        // byte-for-byte. This seam keeps only the last stage's vocabulary: a lossy
-        // round trip is `RepresentationMismatch`, which names the id that lied.
-        T::from_canonical_form(&original).map_err(|e| match e {
-            ContentError::LossyDecode => StoreError::RepresentationMismatch { id: *id },
-            other => StoreError::from(other),
-        })
+        // The three-stage check is the one `ContentAddressable::from_canonical_form`
+        // performs (issue #90) — but this runs the SHARED BODY, not that method.
+        // `from_canonical_form` is defaulted on an unsealed trait, so a `T` can
+        // override it, including with a bare unverified decode; routing the seam
+        // through it would hand `T` the very guarantee this seam exists to make.
+        // Stages 1 and 2 (canonicality, then the typed decode) stay the seam's,
+        // so they run BEFORE any `T` is trusted and cannot be turned off from
+        // outside. Stage 3 necessarily consults `T::canonical_form` — that is
+        // what identity means for a `ContentAddressable`.
+        //
+        // The lossy verdict arrives as a VALUE, so a `ContentError::LossyDecode`
+        // that came out of `T::canonical_form` itself is NOT mistaken for it and
+        // still propagates verbatim, as this function's error table promises.
+        match checked_decode::<T>(&original)? {
+            CheckedDecode::Value(value) => Ok(value),
+            // Exact byte inequality is the decisive condition (stronger than
+            // comparing CIDs — no collision-resistance assumption): the decoded
+            // value is NOT the one named by `id`.
+            CheckedDecode::Lossy => Err(StoreError::RepresentationMismatch { id: *id }),
+        }
     }
 
     /// Encode a [`ContentAddressable`] node and store it **strictly**.

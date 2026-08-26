@@ -771,3 +771,161 @@ fn store_error_display_is_legible() {
         "Content must display transparently as the inner error"
     );
 }
+
+// ------------------------------------------------------------- issue #90 seam
+
+/// `{"alpha": 1}` with `1` written as a non-minimal uint16 (`19 00 01`) — valid
+/// CBOR, NOT canonical dag-cbor, and it still decodes as an `alpha`-shaped type.
+/// `NON_CANONICAL` above cannot serve here: its keys are `bb`/`a`, so a typed
+/// decode fails for the wrong reason.
+const NON_CANONICAL_ALPHA: [u8; 10] = [0xa1, 0x65, 0x61, 0x6c, 0x70, 0x68, 0x61, 0x19, 0x00, 0x01];
+
+/// A node that overrides `from_canonical_form` with a bare, unverified decode —
+/// the exact "optimization" a downstream might reach for to skip the double
+/// decode. `get_node` must not be reachable through it.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct SneakyAlpha {
+    alpha: u64,
+}
+
+impl ContentAddressable for SneakyAlpha {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(self)
+    }
+
+    // Deliberately unverified: no canonicality gate, no re-encode comparison.
+    #[allow(deprecated)]
+    fn from_canonical_form(bytes: &[u8]) -> Result<Self, ContentError> {
+        canonical::from_canonical_dagcbor(bytes)
+    }
+}
+
+#[test]
+fn get_node_cannot_be_weakened_by_a_type_that_overrides_from_canonical_form() {
+    // `from_canonical_form` is a DEFAULTED method on an unsealed trait, so any
+    // downstream `T` can replace it. If `get_node` called it, `T` would be
+    // handing itself the seam's whole integrity guarantee — the bug class #90
+    // exists to close, reintroduced through the new seam.
+    let mut store = MemoryStore::new();
+    let id = store
+        .put(&NON_CANONICAL_ALPHA)
+        .expect("raw put accepts any bytes");
+
+    // Anti-vacuous: the override really is live and really is unverified. If it
+    // ever started refusing, the assertion below would prove nothing.
+    let direct = SneakyAlpha::from_canonical_form(&NON_CANONICAL_ALPHA)
+        .expect("the override must accept the non-canonical bytes");
+    assert_eq!(direct, SneakyAlpha { alpha: 1 });
+    assert_ne!(
+        direct.content_id().expect("content_id"),
+        id,
+        "and the value it returns is NOT the one the stored id names — that is the hazard"
+    );
+
+    // The seam runs the shared body, not the method, so the override cannot reach it.
+    let err = store
+        .get_node::<SneakyAlpha>(&id)
+        .expect_err("get_node must reject the non-canonical stored bytes regardless of T");
+    assert!(
+        matches!(err, StoreError::Content(ContentError::NonCanonical)),
+        "an overriding T must not be able to turn the seam's check off, got {err:?}"
+    );
+}
+
+/// A node whose `canonical_form` itself fails with `LossyDecode` — realistic now
+/// that `canonical::from_canonical_dagcbor_checked` exists and a `canonical_form`
+/// that validates an embedded payload will `?`-propagate its error.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct EncoderSaysLossy;
+
+impl ContentAddressable for EncoderSaysLossy {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        Err(ContentError::LossyDecode)
+    }
+}
+
+#[test]
+fn get_node_does_not_blame_the_bytes_for_an_error_inside_the_types_encoder() {
+    // `get_node`'s documented error table promises that whatever
+    // `T::canonical_form` returns is propagated verbatim. A `LossyDecode` from
+    // INSIDE the encoder must not be relabelled `RepresentationMismatch`, which
+    // says the stored bytes decoded to a value that re-encodes differently — a
+    // re-encode that never completed.
+    let mut store = MemoryStore::new();
+    let bytes = canonical::to_canonical_dagcbor(&EncoderSaysLossy).expect("encode null");
+    let id = store.put(&bytes).expect("put succeeds");
+    let err = store
+        .get_node::<EncoderSaysLossy>(&id)
+        .expect_err("the encoder fails, so the read must fail");
+    assert!(
+        matches!(err, StoreError::Content(ContentError::LossyDecode)),
+        "an encoder-originated error must propagate verbatim, not be blamed on the \
+         stored bytes as RepresentationMismatch, got {err:?}"
+    );
+}
+
+/// Records whether its `Deserialize` ran. The canonicality gate must reject
+/// non-canonical bytes BEFORE any `T` is constructed, and only a spy can tell.
+static SPY_DECODED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(serde::Serialize, Debug, PartialEq)]
+struct Spy {
+    alpha: u64,
+}
+
+impl<'de> serde::Deserialize<'de> for Spy {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        SPY_DECODED.store(true, std::sync::atomic::Ordering::SeqCst);
+        #[derive(serde::Deserialize)]
+        struct Inner {
+            alpha: u64,
+        }
+        Ok(Spy {
+            alpha: Inner::deserialize(d)?.alpha,
+        })
+    }
+}
+
+impl ContentAddressable for Spy {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(self)
+    }
+}
+
+#[test]
+fn get_node_proves_canonicality_before_it_constructs_any_t() {
+    use std::sync::atomic::Ordering::SeqCst;
+
+    // The ORDER is the property, and `get_node_rejects_non_canonical_stored_bytes_
+    // before_trusting_t` cannot see it: its `T` decodes either way, so the same
+    // error appears whichever stage ran first. The spy can.
+    let mut store = MemoryStore::new();
+    let bad = store
+        .put(&NON_CANONICAL_ALPHA)
+        .expect("raw put accepts any bytes");
+    SPY_DECODED.store(false, SeqCst);
+    let err = store
+        .get_node::<Spy>(&bad)
+        .expect_err("non-canonical stored bytes must be rejected");
+    assert!(matches!(
+        err,
+        StoreError::Content(ContentError::NonCanonical)
+    ));
+    assert!(
+        !SPY_DECODED.load(SeqCst),
+        "the canonicality gate must run BEFORE any T is constructed"
+    );
+
+    // Anti-vacuous twin: the spy DOES fire on bytes that pass the gate, so the
+    // assertion above is about ordering and not about a spy that never runs.
+    let good = store
+        .put_node(&Spy { alpha: 1 })
+        .expect("a canonical node stores");
+    SPY_DECODED.store(false, SeqCst);
+    let back: Spy = store.get_node(&good).expect("get_node succeeds");
+    assert_eq!(back, Spy { alpha: 1 });
+    assert!(
+        SPY_DECODED.load(SeqCst),
+        "the spy must actually be the decode path, or the ordering check is vacuous"
+    );
+}

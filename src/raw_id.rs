@@ -389,10 +389,23 @@ mod tests {
         let back: RawContentId = crate::canonical::from_canonical_dagcbor_checked(&cbor).unwrap();
         assert_eq!(back, id);
         // A dag-cbor link to a *ContentId* does not deserialize as a RawContentId.
+        //
+        // The VARIANT is asserted, not merely `is_err()`. `RawContentId` stores
+        // the profile in its `Cid`, so a mutant `Deserialize` that dropped the
+        // profile gate and rebuilt the id from the bare digest would re-serialize
+        // with the raw codec `0x55` instead of the input's dag-cbor `0x71` — and
+        // the checked door's stage-3 byte comparison would refuse it with
+        // `LossyDecode`. `is_err()` would stay green on a genuine reintroduction
+        // of profile aliasing at the serde boundary; `DecodingError` is the
+        // boundary refusal this test exists to prove, and only that.
         let dag = ContentId::from_dag_cbor_digest(id.digest_bytes());
         let cbor_dag = crate::canonical::to_canonical_dagcbor(&dag).unwrap();
+        let err = crate::canonical::from_canonical_dagcbor_checked::<RawContentId>(&cbor_dag)
+            .expect_err("a dag-cbor link must not deserialize as a RawContentId");
         assert!(
-            crate::canonical::from_canonical_dagcbor_checked::<RawContentId>(&cbor_dag).is_err()
+            matches!(err, ContentError::DecodingError { .. }),
+            "the profile must be refused at the serde BOUNDARY (DecodingError), not \
+             caught later by the re-encode comparison, got {err:?}"
         );
     }
 }
