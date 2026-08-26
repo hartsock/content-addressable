@@ -48,6 +48,17 @@ which keeps every key. Only a **typed** round trip sees it.
   `DeserializeOwned + Sized` and not also `Serialize`. It carries
   `where Self: Sized`, so the trait stays dyn-compatible. The guarantee, stated:
   `T::from_canonical_form(b)?.content_id()? == ContentId::from_canonical_bytes(b)`.
+
+  **Upgrade note — this one addition is "minor / possibly-breaking" (RFC 1105),
+  not purely additive.** A new defaulted method on a public trait can create a
+  method-resolution ambiguity: a downstream type that implements
+  `ContentAddressable` *and* gets a `from_canonical_form` associated function from
+  another trait in scope now fails with `error[E0034]: multiple applicable items
+  in scope`. The method's own `where Self: DeserializeOwned` clause does not
+  remove it as a candidate, so the exposure is not limited to `Deserialize` types.
+  Nothing was removed or narrowed, and no behavior changed; if you hit E0034,
+  disambiguate with `<T as OtherTrait>::from_canonical_form(b)`. The other three
+  additions below are unconditionally non-breaking.
 - **`ContentError::LossyDecode`** — added under the enum's `#[non_exhaustive]`
   contract, which the `0.1.0` error policy kept for exactly this. It carries no
   `source`, like `NonCanonical`: nothing failed underneath, a comparison simply
@@ -73,6 +84,21 @@ which keeps every key. Only a **typed** round trip sees it.
 
 ### Fixed
 
+- **A `tag-42` link cannot be re-encoded from Python.** The Python codec has been
+  asymmetric about links since it shipped: decoding maps one to a `ContentId`
+  object, while `to_canonical_dagcbor` has no case for a `ContentId` and raises
+  `TypeError`. The asymmetry itself is unchanged (fixing it means rewriting the
+  Python encode path, which is not this release's business), but it is now
+  **documented and pinned by tests** in the README, the new door's docstring, and
+  the Python suite: a link-bearing document decodes fine and
+  `ContentId.from_canonical_bytes(b)` is still its correct id, but you must mint
+  from the *bytes*, never from the decoded value. Rust has no such gap.
+- **`tests/test_profile_validation.py`'s foreign-link fixture was malformed** — 44
+  bytes for a CBOR item declaring 41, so every decode of it failed in the codec
+  with `TrailingData` *before* the profile check, and the only Python test
+  guarding that path had never once exercised it. Corrected, parametrized over
+  both decode doors, the error message asserted, and a structural guard added so
+  the fixture cannot silently go malformed again.
 - **The Python `from_canonical_dagcbor` docstring claimed a check that never
   ran** — "Raises ValueError if the bytes are not valid canonical dag-cbor". It
   did not verify canonicality. The docstring now states what the function does
@@ -80,9 +106,17 @@ which keeps every key. Only a **typed** round trip sees it.
 - **One canonicality implementation, not two.** The gate
   `ContentId::from_canonical_bytes_checked` applies is now a single shared
   function, and `NodeStoreExt::get_node` — which had open-coded exactly the three
-  stages `ContentAddressable::from_canonical_form` performs — delegates to it,
-  keeping only its own vocabulary for the verdict (`RepresentationMismatch`).
+  stages `ContentAddressable::from_canonical_form` performs — shares that body.
   Behavior is unchanged in both; they can no longer drift apart.
+
+  `get_node` runs the **shared body**, not the trait method: `from_canonical_form`
+  is defaulted on an unsealed trait, so a `T` that overrode it could otherwise
+  have switched the seam's whole check off. Stages 1 and 2 (canonicality, then the
+  typed decode) stay type-independent and out of `T`'s reach; stage 3 necessarily
+  consults `T::canonical_form`, which is what identity *means* for a
+  `ContentAddressable`. The lossy verdict travels as a value rather than an error,
+  so a `LossyDecode` raised inside a caller's own `canonical_form` is still
+  propagated verbatim instead of being relabelled `RepresentationMismatch`.
 
 ### Notes
 
@@ -245,5 +279,6 @@ release outside `0.1.x`.
 - Non-integer floats are outside the canonical vector set (DAG-CBOR float rules
   are handled per-language, not in the shared cross-language gate).
 
+[0.1.2]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.2
 [0.1.1]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.1
 [0.1.0]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.0

@@ -62,7 +62,17 @@ invisible to it. The bare `canonical::from_canonical_dagcbor` is **deprecated**;
 its behavior is unchanged for `0.1.x` and removing it is a major-version event.
 `ContentError::LossyDecode` was **added** under the enum's `#[non_exhaustive]`
 contract — the first use of the additive path the error policy below reserves.
-Adding to the frozen surface is allowed; nothing above was narrowed.
+Nothing above was narrowed and no behavior changed.
+
+One caveat, stated rather than glossed: a new **defaulted trait method** is RFC
+1105's *minor / possibly-breaking* category, not purely additive. A downstream
+type implementing `ContentAddressable` that also gets a `from_canonical_form`
+associated function from another trait in scope now fails with `error[E0034]:
+multiple applicable items in scope`, and a `^0.1` dependency picks that up with
+no opt-in. The method's `where Self: DeserializeOwned` clause does not remove it
+as a candidate. Disambiguate with `<T as OtherTrait>::from_canonical_form(b)`.
+The other `0.1.2` additions (a free function, a `#[non_exhaustive]` variant, a
+Python binding) carry no such exposure.
 
 ### Presentation contract ([#6])
 
