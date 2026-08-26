@@ -429,23 +429,34 @@ fn from_canonical_dagcbor<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'
     ipld_to_py(py, &value)
 }
 
-/// Decode canonical dag-cbor bytes, **first verifying they are canonical**.
+/// Decode dag-cbor bytes, **first verifying they are the canonical encoding**.
 ///
 /// The checked sibling of [`from_canonical_dagcbor`], and the door to use for
 /// bytes that did not come from [`to_canonical_dagcbor`] in this process:
-/// foreign, stored, or off the wire. It guarantees what the plain decode does
-/// not — that the value handed back re-encodes to *exactly* the input bytes, and
-/// so carries the same [`ContentId`] they do:
+/// foreign, stored, or off the wire. Valid-but-non-canonical CBOR (reordered map
+/// keys, non-minimal integers, indefinite lengths) decodes perfectly well and
+/// re-encodes *differently*, so the plain decode silently hands back a value
+/// whose identity is not the one it arrived under. That is what this refuses.
+///
+/// For a value the Python encoder can represent, that gives the equation the
+/// plain decode does not:
 ///
 ///     content_id(from_canonical_dagcbor_checked(b)) == ContentId.from_canonical_bytes(b)
 ///
-/// Valid-but-non-canonical CBOR (reordered map keys, non-minimal integers,
-/// indefinite lengths) decodes perfectly well and re-encodes *differently*, so
-/// the plain decode silently hands back a value whose identity is not the one it
-/// arrived under. That is what this refuses.
+/// **Known limitation — tag-42 links.** The equation is *not* available for bytes
+/// containing an IPLD link, because the Python codec is asymmetric about them and
+/// has been since it shipped: decoding maps a link to a `ContentId` object, while
+/// `to_canonical_dagcbor` (via `pythonize`) has no case for one and raises
+/// `TypeError`. So a link-bearing document decodes fine here — the canonicality
+/// check is sound, and `ContentId.from_canonical_bytes(b)` is still its correct
+/// id — but the value that comes back cannot be re-encoded, so you cannot
+/// re-derive the id *from the value*. The Python suite pins that as a known
+/// property rather than leaving it to be discovered.
 ///
-/// Raises `ValueError` if the bytes are not dag-cbor at all, or are valid CBOR
-/// but not its canonical encoding.
+/// Raises `ValueError` when the bytes are not dag-cbor at all, are valid CBOR but
+/// not its canonical encoding, or contain a link to a CID outside this crate's
+/// profile (the `ContentId` conversion refuses it, exactly as the plain decode
+/// does).
 ///
 /// The core crate's third failure mode — a *typed* decode dropping a field the
 /// target type does not name — cannot arise here: Python decodes into the

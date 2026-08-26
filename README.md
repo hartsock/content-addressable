@@ -175,7 +175,7 @@ precondition — it is **not** universally safe.
 |----------|---------------------|----------|
 | Hash a normal value | `value.content_id()` / `content_id(value)` | **Preferred safe path** |
 | Encode a value to bytes | `canonical::to_canonical_dagcbor(v)` / `to_canonical_dagcbor(v)` | Produces canonical DAG-CBOR |
-| Accept foreign / untrusted bytes (id only) | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: `content_id(from_canonical_dagcbor_checked(b))` | Validates DAG-CBOR canonicality; errors on non-canonical |
+| Accept foreign / untrusted bytes (id only) | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: `from_canonical_dagcbor_checked(b)` to validate, then `ContentId.from_canonical_bytes(b)` | Validates DAG-CBOR canonicality; errors on non-canonical. Python still has no single checked *constructor*: validate the bytes, then mint from the same bytes — do **not** re-derive the id from the decoded value, which fails for link-bearing documents (see below) |
 | Hash already-trusted canonical bytes | `ContentId::from_canonical_bytes(b)` | **Unchecked** precondition: caller asserts `b` is canonical DAG-CBOR |
 | Identify opaque bytes (a file, chunk, binary, payload) | `RawContentId::from_content(b)` / `RawContentId.from_content(b)` | Hashes the bytes; nothing to get wrong — the bytes *are* the content |
 | Wrap an existing BLAKE3 digest **of opaque bytes** | `RawContentId::from_blake3_digest(d)` / `RawContentId.from_blake3_digest(d)` | No rehash; the honest home of the no-rehash bridge (byte-identical to kyln raw CIDs / bare `blake3` digests) |
@@ -209,6 +209,14 @@ A failed check names the party at fault: `ContentError::NonCanonical` blames the
 bytes, `ContentError::LossyDecode` blames the type. In Python only the first is
 reachable — decoding into `dict`/`list` keeps every key, so no field can be
 dropped ([#90]).
+
+> **Python, tag-42 links.** The Python codec is asymmetric about links and has
+> been since it shipped: decoding maps one to a `ContentId` object, while
+> `to_canonical_dagcbor` has no case for a `ContentId` and raises `TypeError`. A
+> link-bearing document therefore *decodes* fine — the canonicality check is
+> sound, and `ContentId.from_canonical_bytes(b)` is still its correct id — but the
+> value that comes back cannot be re-encoded, so the id cannot be re-derived from
+> the value. Pinned by the Python suite as a known property. Rust has no such gap.
 
 ## Presentation forms
 

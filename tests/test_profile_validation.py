@@ -11,7 +11,12 @@ raise ``ValueError`` — never reach a presentation accessor (``digest_bytes`` /
 
 import pytest
 
-from content_addressable import ContentId, content_id, from_canonical_dagcbor
+from content_addressable import (
+    ContentId,
+    content_id,
+    from_canonical_dagcbor,
+    from_canonical_dagcbor_checked,
+)
 
 # A CIDv1 dag-cbor **SHA-256** (not BLAKE3), 32-byte digest — well-formed, wrong
 # profile (BLAKE3 CIDs render as ``bafyr4i…``; this SHA-256 one is ``bafyrei…``).
@@ -19,11 +24,33 @@ FOREIGN_CID_BYTES = bytes.fromhex(
     "017112200707070707070707070707070707070707070707070707070707070707070707"
 )
 FOREIGN_CID_STR = "bafyreiaha4dqobyha4dqobyha4dqobyha4dqobyha4dqobyha4dqobyha4"
-# A dag-cbor tag-42 link wrapping that foreign CID.
+# A dag-cbor tag-42 link wrapping that foreign CID:
+#   d8 2a     tag 42 (IPLD link)
+#   58 25     byte string, one-byte length 0x25 = 37
+#   00        the multibase identity prefix a CID carries inside a link
+#   ..36..    FOREIGN_CID_BYTES
+# = 4 + 37 = 41 bytes. It carried 3 surplus 0x07 bytes until 0.1.2, which made
+# every decode of it fail with ``TrailingData`` *before* reaching the profile
+# check — so the test below passed without ever exercising what it names.
 FOREIGN_LINK_DAGCBOR = bytes.fromhex(
-    "d82a582500017112200707070707070707070707070707070707070707"
-    "070707070707070707070707070707"
+    "d82a5825" "00" "017112200707070707070707070707070707070707070707070707070707070707070707"
 )
+
+
+def test_the_foreign_link_fixture_is_a_well_formed_cbor_item():
+    """Structural guard, so the fixture cannot silently go malformed again.
+
+    A tag-42 byte string whose declared length does not match the bytes present
+    fails in the codec, which looks exactly like a successful profile rejection
+    from the outside.
+    """
+    assert FOREIGN_LINK_DAGCBOR[:2] == b"\xd8\x2a", "must be an IPLD tag-42 link"
+    declared = FOREIGN_LINK_DAGCBOR[3]
+    assert len(FOREIGN_LINK_DAGCBOR) == 4 + declared, (
+        f"byte string declares {declared} bytes but "
+        f"{len(FOREIGN_LINK_DAGCBOR) - 4} are present"
+    )
+    assert FOREIGN_LINK_DAGCBOR[5:] == FOREIGN_CID_BYTES, "must wrap the foreign CID"
 
 
 def test_from_bytes_rejects_a_foreign_cid():
@@ -36,9 +63,19 @@ def test_parse_rejects_a_foreign_cid():
         ContentId.parse(FOREIGN_CID_STR)
 
 
-def test_from_canonical_dagcbor_rejects_a_foreign_cid_link():
-    with pytest.raises(ValueError):
-        from_canonical_dagcbor(FOREIGN_LINK_DAGCBOR)
+@pytest.mark.parametrize(
+    "decode", [from_canonical_dagcbor, from_canonical_dagcbor_checked]
+)
+def test_decoding_a_foreign_cid_link_is_rejected_at_both_doors(decode):
+    """The profile law applies to the checked door too.
+
+    These bytes ARE canonical dag-cbor, so the canonicality stage has nothing to
+    say; the refusal has to come from the ``ContentId`` conversion. The message is
+    asserted so a codec-level failure (the pre-0.1.2 malformed fixture) can no
+    longer masquerade as a profile rejection.
+    """
+    with pytest.raises(ValueError, match="not the content-addressable profile"):
+        decode(FOREIGN_LINK_DAGCBOR)
 
 
 def test_an_on_profile_id_still_round_trips():

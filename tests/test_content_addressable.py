@@ -463,6 +463,81 @@ def test_checked_decode_rejects_non_cbor_garbage():
 
 
 # --------------------------------------------------------------------------- #
+# tag-42 links: what the checked door does and does NOT promise
+# --------------------------------------------------------------------------- #
+#
+# The Python codec is asymmetric about links and has been since it shipped:
+# `ipld_to_py` maps `Ipld::Link` to a `ContentId` object, while the encode side
+# (`pythonize`) has no case for a `ContentId` and raises TypeError. That predates
+# this door; what it means for the door is pinned here rather than left to be
+# discovered, because links are dag-cbor's headline feature and every Merkle node
+# carries one.
+
+
+def _link_bytes(cid):
+    """Canonical dag-cbor for a bare tag-42 link to `cid` (0x00 multibase prefix).
+
+    `d8 2a` (tag 42) + `58 <len>` (byte string, one-byte length — the payload is
+    37 bytes, above the 23-byte inline limit and well below 256).
+    """
+    payload = b"\x00" + cid.to_bytes()
+    return bytes([0xD8, 0x2A, 0x58, len(payload)]) + payload
+
+
+def test_the_checked_door_accepts_a_canonical_link():
+    """Canonicality is sound for links; only the *re-encode* is unavailable.
+
+    Acceptance by the checked door IS the canonicality proof — it refuses
+    anything whose IPLD re-encoding differs from the input.
+    """
+    cid = content_id({"a": 1})
+    raw = _link_bytes(cid)
+    assert from_canonical_dagcbor_checked(raw) == cid
+    assert isinstance(from_canonical_dagcbor_checked(raw), ContentId)
+
+
+def test_a_decoded_link_cannot_be_re_encoded_yet():
+    """The known limitation, stated as a test so it cannot surprise anyone.
+
+    A link decodes to a `ContentId` object, and `to_canonical_dagcbor` cannot
+    represent one — so `content_id(from_canonical_dagcbor_checked(b))` raises
+    instead of returning `ContentId.from_canonical_bytes(b)`. Validate the bytes,
+    then mint from the *bytes*, never from the decoded value.
+    """
+    cid = content_id({"a": 1})
+    raw = _link_bytes(cid)
+    decoded = from_canonical_dagcbor_checked(raw)
+    with pytest.raises(TypeError):
+        to_canonical_dagcbor(decoded)
+    # The same limitation nested inside an ordinary record.
+    nested = bytes([0xA1, 0x64]) + b"link" + raw
+    value = from_canonical_dagcbor_checked(nested)
+    assert value == {"link": cid}
+    with pytest.raises(TypeError):
+        to_canonical_dagcbor(value)
+    # The supported recipe still works: validate the bytes with the checked door,
+    # then mint from those same bytes rather than from the decoded value.
+    validated = from_canonical_dagcbor_checked(nested)  # raises if non-canonical
+    assert validated == {"link": cid}
+    minted = ContentId.from_canonical_bytes(nested)
+    assert str(minted).startswith("b") and len(minted.digest_hex()) == 64
+
+
+def test_checked_decode_rejects_a_link_to_a_foreign_cid():
+    """A canonical link whose CID is off-profile is a ValueError, not a pass.
+
+    The bytes ARE canonical dag-cbor, so the canonicality stage says nothing; the
+    refusal comes from the `ContentId` conversion, the same profile law the plain
+    decoder enforces (see tests/test_profile_validation.py).
+    """
+    foreign_link = bytes.fromhex("d82a58250001711220" + "07" * 32)
+    with pytest.raises(ValueError):
+        from_canonical_dagcbor_checked(foreign_link)
+    with pytest.raises(ValueError):
+        from_canonical_dagcbor(foreign_link)
+
+
+# --------------------------------------------------------------------------- #
 # Module surface
 # --------------------------------------------------------------------------- #
 
