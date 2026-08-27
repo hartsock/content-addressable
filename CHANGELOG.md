@@ -15,11 +15,16 @@ Two distributions ship from this one repository and share a version:
 The PyPI **distribution** name is `content-addressable` (hyphen); the **import**
 name is `content_addressable` (underscore).
 
-## [0.1.2] — the decode side of the contract
+## Unreleased — the decode side of the contract
 
-Additive: the frozen `0.1.0` core contract is **untouched**, every golden vector
-is byte-identical, and identifiers minted under `0.1.0` / `0.1.1` remain valid.
+Lands as `0.1.2`; the package version is bumped in a separate release PR, as
+`0.1.1` was ([#86]).
+
 This release closes the hole on the *other* side of the codec — decoding ([#90]).
+Every golden vector is byte-identical and identifiers minted under `0.1.0` /
+`0.1.1` remain valid. It is **not** purely additive, and says so: it makes **one
+deliberate, narrow exception** to the otherwise frozen `0.1.x` Rust API, recorded
+under *Stability exception* below.
 
 **The defect.** `canonical::from_canonical_dagcbor` was a bare
 `serde_ipld_dagcbor::from_slice`. It never compared the bytes it was handed
@@ -49,16 +54,7 @@ which keeps every key. Only a **typed** round trip sees it.
   `where Self: Sized`, so the trait stays dyn-compatible. The guarantee, stated:
   `T::from_canonical_form(b)?.content_id()? == ContentId::from_canonical_bytes(b)`.
 
-  **Upgrade note — this one addition is "minor / possibly-breaking" (RFC 1105),
-  not purely additive.** A new defaulted method on a public trait can create a
-  method-resolution ambiguity: a downstream type that implements
-  `ContentAddressable` *and* gets a `from_canonical_form` associated function from
-  another trait in scope now fails with `error[E0034]: multiple applicable items
-  in scope`. The method's own `where Self: DeserializeOwned` clause does not
-  remove it as a candidate, so the exposure is not limited to `Deserialize` types.
-  Nothing was removed or narrowed, and no behavior changed; if you hit E0034,
-  disambiguate with `<T as OtherTrait>::from_canonical_form(b)`. The other three
-  additions below are unconditionally non-breaking.
+  This is the one addition covered by the *Stability exception* below.
 - **`ContentError::LossyDecode`** — added under the enum's `#[non_exhaustive]`
   contract, which the `0.1.0` error policy kept for exactly this. It carries no
   `source`, like `NonCanonical`: nothing failed underneath, a comparison simply
@@ -70,6 +66,32 @@ which keeps every key. Only a **typed** round trip sees it.
   `LossyDecode` half has no Python analogue and cannot: Python decodes into the
   generic model, which keeps every key, so no field can be dropped. The test
   suite pins that as a property rather than leaving it assumed.
+
+### Stability exception
+
+Version `0.1.2` makes **one deliberate, narrow exception** to the otherwise
+frozen `0.1.x` Rust API: it adds the defaulted associated function
+`ContentAddressable::from_canonical_form`.
+
+Adding a defaulted associated function to a public trait is RFC 1105's *minor /
+possibly breaking* category. A downstream type that implements
+`ContentAddressable` **and** receives an associated function of the same name
+from another trait in scope can now fail with `error[E0034]: multiple applicable
+items in scope`. Disambiguate with fully qualified trait syntax:
+
+```rust
+<T as OtherTrait>::from_canonical_form(bytes)
+```
+
+The method's `where Self: DeserializeOwned` clause does **not** remove it from
+resolution for such an implementor, so the exposure is not limited to types that
+implement `Deserialize`. A `^0.1` dependency picks this up without an opt-in,
+which is why it is recorded rather than left to be discovered.
+
+No wire bytes, CID profile, canonical encoding, identifier, existing method
+signature, or existing runtime behavior is removed or changed. The remainder of
+the `0.1.x` stability contract stays in force, and this exception does not
+license further ones. See `docs/STABILITY.md`.
 
 ### Deprecated
 
@@ -131,6 +153,7 @@ which keeps every key. Only a **typed** round trip sees it.
   identity.
 
 [#90]: https://github.com/hartsock/content-addressable/issues/90
+[#86]: https://github.com/hartsock/content-addressable/pull/86
 
 ## [0.1.1] — the identity/classification layer
 
@@ -279,6 +302,5 @@ release outside `0.1.x`.
 - Non-integer floats are outside the canonical vector set (DAG-CBOR float rules
   are handled per-language, not in the shared cross-language gate).
 
-[0.1.2]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.2
 [0.1.1]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.1
 [0.1.0]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.0

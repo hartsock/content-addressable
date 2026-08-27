@@ -184,11 +184,15 @@ impl ContentAddressable for Node {
     }
 }
 
-/// A [`ContentAddressable`] whose canonical form is deterministic but is **not**
-/// its serde encoding: it wraps the value in an envelope. Its serde round trip is
-/// perfectly faithful, so only a check that re-encodes through `canonical_form`
-/// — the function that actually defines this type's identity — can see that the
-/// bytes do not name it.
+/// A **lawful** [`ContentAddressable`] whose canonical form is deliberately not
+/// its serde encoding: it wraps the value in an envelope.
+///
+/// Nothing about this is a defect — its identity is well defined, deterministic
+/// and reproducible, so `canonical_form` is lawful. Two things follow, one per
+/// test below: only a stage 3 that re-encodes through `canonical_form` can see
+/// that its *serde* bytes do not name it, and its *own* canonical bytes are not
+/// directly deserializable as `Self`, which is why `from_canonical_form` is
+/// checked ingress rather than a universal inverse.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Enveloped {
     alpha: u64,
@@ -254,20 +258,35 @@ fn from_canonical_form_re_encodes_through_canonical_form_not_serde() {
         matches!(err, ContentError::LossyDecode),
         "the trait door must re-encode through canonical_form, got {err:?}"
     );
+}
 
-    // ...and the bytes that DO name one are accepted.
-    let own = Enveloped { alpha: 7 }
-        .canonical_form()
-        .expect("canonical_form");
-    // (Its own canonical form is an envelope, which does not decode as the
-    // struct — so this type simply has no readable canonical form. That is a
-    // property of the type, correctly reported, not of the door.)
+#[test]
+fn a_custom_canonical_form_is_lawful_but_not_directly_deserializable() {
+    // The other half, and the reason `from_canonical_form` is documented as a
+    // PARTIAL inverse. `Enveloped` is lawful — its canonical form is
+    // deterministic and its identity well defined — but its own canonical bytes
+    // are an envelope, which does not decode as the struct. Prerequisite 2 (the
+    // bytes are directly deserializable as `Self`) fails, and the door says so
+    // instead of guessing.
+    let node = Enveloped { alpha: 7 };
+    let own = node.canonical_form().expect("canonical_form");
+
+    // Lawful: content_id IS the id of its canonical form, and it verifies.
+    let id = node.content_id().expect("content_id");
+    assert_eq!(
+        id,
+        content_addressable::ContentId::from_canonical_bytes(&own),
+        "the type IS lawful — this is not a broken implementation"
+    );
+    assert!(node.verify(&id).expect("verify"));
+
+    // ...and yet its own canonical form is not readable back through this door.
+    let err = Enveloped::from_canonical_form(&own)
+        .expect_err("an envelope does not decode as the struct");
     assert!(
-        matches!(
-            Enveloped::from_canonical_form(&own),
-            Err(ContentError::DecodingError { .. })
-        ),
-        "an envelope does not decode as the struct — a DecodingError, not a silent value"
+        matches!(err, ContentError::DecodingError { .. }),
+        "a custom canonical form with no matching Deserialize must fail at the \
+         TYPED DECODE — not silently, and not as a round-trip mismatch — got {err:?}"
     );
 }
 

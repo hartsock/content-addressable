@@ -42,11 +42,19 @@ computes for the same canonical IPLD value.
 
 ## Status & stability
 
-The package is **`0.1.0`** — the first release that freezes the core contract.
-The core byte/wire and API contracts are locked for the whole `0.1.x` line
-(changing any is a breaking release outside `0.1.x`), while the optional
-`unstable-merkle` / `unstable-store` features are explicitly still moving and are
-named to say so.
+The core byte/wire and API contracts have been locked since `0.1.0` and hold for
+the whole `0.1.x` line (changing any is a breaking release outside `0.1.x`),
+while the optional `unstable-merkle` / `unstable-store` features are explicitly
+still moving and are named to say so.
+
+**One recorded exception.** `0.1.2` adds the defaulted associated function
+`ContentAddressable::from_canonical_form`, which is RFC 1105 *minor / possibly
+breaking*: a downstream type that also receives a `from_canonical_form` from
+another trait in scope can hit `error[E0034]`, and the fix is fully qualified
+trait syntax, `<T as OtherTrait>::from_canonical_form(bytes)`. No wire bytes, CID
+profile, canonical encoding, identifier, existing signature, or existing behavior
+changed. The rest of the `0.1.x` contract stays in force — see
+[`docs/STABILITY.md`](docs/STABILITY.md) ([#90]).
 
 | Surface | Default | Stability |
 |---------|:-------:|-----------|
@@ -361,8 +369,8 @@ catalog. **The `store` trait/API is experimental and NOT frozen.**
 The frozen `0.1.x` contracts — CID profile, presentation, serde representation,
 error policy, `verify`/`ensure_content_id`, crate-root exports, MSRV/edition, the
 no-rehash digest bridge, and the experimental-feature exclusions — are recorded
-in [`docs/STABILITY.md`](docs/STABILITY.md), with issue provenance. Treat the
-frozen surfaces as durable.
+in [`docs/STABILITY.md`](docs/STABILITY.md), with issue provenance, together with
+the single `0.1.2` exception noted above. Treat the frozen surfaces as durable.
 
 ## Development
 

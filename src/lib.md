@@ -100,19 +100,35 @@ The second is invisible to [`ContentId::from_canonical_bytes_checked`], which
 re-encodes as generic `Ipld` and so keeps every key. Only a **typed** round
 trip sees it. Pick the door by what you hold:
 
-| You have | Use | It proves |
-|----------|-----|-----------|
-| bytes + a [`ContentAddressable`] type | [`ContentAddressable::from_canonical_form`] | canonical bytes, and `canonical_form` reproduces them — so `content_id()` equals the id of the bytes |
-| bytes + any `Serialize + Deserialize` type | [`canonical::from_canonical_dagcbor_checked`] | canonical bytes, and the serde round trip is lossless |
-| bytes, and you want only their *id* | [`ContentId::from_canonical_bytes_checked`] | canonical bytes (no type is involved) |
+| You have | Use | What it establishes |
+|----------|-----|---------------------|
+| bytes + a [`ContentAddressable`] type | [`ContentAddressable::from_canonical_form`] | the bytes are canonical, and `value.canonical_form()?` reproduces them exactly |
+| bytes + any `Serialize + Deserialize` type | [`canonical::from_canonical_dagcbor_checked`] | the same, with `to_canonical_dagcbor(&value)?` in place of `canonical_form` |
+| bytes, and you want only their *id* | [`ContentId::from_canonical_bytes_checked`] | the bytes are canonical (no type is involved) |
+
+Both checked doors are **checked ingress** and *partial* inverses, not universal
+ones: each succeeds on exactly the bytes that are canonical dag-cbor, decodable
+as the target type, and reproduced byte-for-byte by that type's canonical form —
+and each names the prerequisite that failed. The enforced invariant is byte
+equality; the familiar `value.content_id()? == ContentId::from_canonical_bytes(b)`
+equation is a **corollary that holds for a lawful implementation only**, because
+[`ContentAddressable::content_id`] is overridable and this crate cannot check an
+override. Use [`ContentAddressable::ensure_content_id`] when you need that
+equation held rather than assumed.
+
+The contract is stated in full, once, at
+[`ContentAddressable::from_canonical_form`]. It is the place to read about
+lawfulness, and about the lawful types whose canonical form is deliberately not
+their serde representation — those are checked ingress's honest limit, not a
+defect.
 
 `canonical::from_canonical_dagcbor` is **deprecated** as of `0.1.2` (issue
-#90): it verifies neither, and its name says otherwise. Behavior is unchanged
-for `0.1.x`.
+#90): it verifies neither canonicality nor the round trip, and its name says
+otherwise. Behavior is unchanged for `0.1.x`.
 
 A failed check names the party at fault:
 [`ContentError::NonCanonical`] blames the bytes, [`ContentError::LossyDecode`]
-blames the type.
+blames the bytes/type pairing.
 
 # Public API surface (FROZEN at 0.1.0)
 
@@ -165,11 +181,21 @@ smaller surface. `BLAKE3_DIGEST_LEN` stays private. The newer public items
 ([`ContentId::from_canonical_bytes_checked`], [`ContentId::digest_bytes`],
 [`ContentId::digest_hex`], [`ContentId::from_dag_cbor_digest`] (and its
 deprecated predecessor `from_blake3_content_digest`),
-[`ContentAddressable::ensure_content_id`], and — added additively in `0.1.2` —
+[`ContentAddressable::ensure_content_id`], and — added in `0.1.2` —
 [`canonical::from_canonical_dagcbor_checked`] and
 [`ContentAddressable::from_canonical_form`]) are intentional and individually
 documented at their definitions. Adding to this surface is allowed under the
 freeze; removing or narrowing it is not.
+
+**One `0.1.2` exception, recorded.** The defaulted
+[`ContentAddressable::from_canonical_form`] is not covered by "adding is always
+safe": a defaulted associated function on a public trait can cause `error[E0034]`
+for a downstream type that also receives a `from_canonical_form` from another
+trait in scope (disambiguate with `<T as OtherTrait>::from_canonical_form(b)`).
+That is the single deliberate stability exception in `0.1.2`; no wire bytes, CID
+profile, canonical encoding, identifier, existing signature or existing behavior
+changed, and the rest of the `0.1.x` contract stays in force. See
+`docs/STABILITY.md`.
 
 # MSRV / edition policy (FROZEN at 0.1.0)
 

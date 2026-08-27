@@ -95,7 +95,7 @@ pub trait ContentAddressable {
     /// # Errors
     ///
     /// Propagates any error from [`content_id`](Self::content_id) only (i.e. an
-    /// encoding failure in `canonical_form`); never an `Err` on a clean
+    /// encoding failure in [`canonical_form`](Self::canonical_form)); never an `Err` on a clean
     /// mismatch.
     fn verify(&self, expected: &ContentId) -> Result<bool, ContentError> {
         Ok(&self.content_id()? == expected)
@@ -113,7 +113,7 @@ pub trait ContentAddressable {
     /// This is the strict form the crate's doctrine promises: it makes
     /// [`ContentError::VerificationFailed`] a real, reachable, tested error path
     /// rather than a name callers must construct by hand. It is a defaulted trait
-    /// method, so every implementor gets it for free. Both `verify` and this
+    /// method, so every implementor gets it for free. Both [`verify`](Self::verify) and this
     /// helper are **frozen** for the `0.1.0` API surface (README gate item #8).
     ///
     /// # Errors
@@ -121,7 +121,7 @@ pub trait ContentAddressable {
     /// - [`ContentError::VerificationFailed`] if the recomputed id differs from
     ///   `expected`.
     /// - Otherwise propagates any error from [`content_id`](Self::content_id)
-    ///   (e.g. an encoding failure in `canonical_form`).
+    ///   (e.g. an encoding failure in [`canonical_form`](Self::canonical_form)).
     fn ensure_content_id(&self, expected: &ContentId) -> Result<(), ContentError> {
         let computed = self.content_id()?;
         if &computed == expected {
@@ -134,87 +134,139 @@ pub trait ContentAddressable {
         }
     }
 
-    /// Decode a value from canonical dag-cbor bytes, **proving the bytes name
-    /// it** — the inverse of [`canonical_form`](Self::canonical_form).
+    /// **Checked ingress**: decode a value from its canonical form, proving the
+    /// bytes reproduce it — a checked *partial* inverse of
+    /// [`canonical_form`](Self::canonical_form).
     ///
-    /// This is the safe ingress for bytes you did not produce: foreign, stored,
-    /// or off the wire. It guarantees the equation a bare decode does not —
+    /// This is the door for bytes you did not produce: foreign, stored, or off
+    /// the wire.
     ///
-    /// ```text
-    /// T::from_canonical_form(b)?.content_id()? == ContentId::from_canonical_bytes(b)
+    /// # The enforced invariant
+    ///
+    /// On success, and unconditionally:
+    ///
+    /// ```
+    /// # use content_addressable::{canonical, ContentAddressable, ContentError};
+    /// # use serde::{Deserialize, Serialize};
+    /// # #[derive(Serialize, Deserialize)] struct T { a: u64 }
+    /// # impl ContentAddressable for T {
+    /// #     fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+    /// #         canonical::to_canonical_dagcbor(self)
+    /// #     }
+    /// # }
+    /// # let bytes: &[u8] = &T { a: 1 }.canonical_form()?;
+    /// let value = T::from_canonical_form(bytes)?;
+    /// assert_eq!(value.canonical_form()?, bytes);
+    /// # Ok::<(), ContentError>(())
     /// ```
     ///
-    /// — so the value you end up holding carries the identity it arrived under,
-    /// rather than a different one nothing told you about.
-    ///
-    /// Three stages, each blaming a different party:
-    ///
-    /// 1. **Canonicality** — the bytes are canonical dag-cbor. Established
-    ///    generically, *before* any `Self` is trusted, so the guarantee does not
-    ///    lean on this type's serde impl being well behaved. Blames the **bytes**
-    ///    ([`ContentError::NonCanonical`]).
-    /// 2. **Typed decode** — the bytes decode as a `Self`. Blames the
-    ///    **bytes/type pair** ([`ContentError::DecodingError`]).
-    /// 3. **Forward re-encode** — [`canonical_form`](Self::canonical_form) on the
-    ///    decoded value reproduces the input byte-for-byte. Blames the **type**
-    ///    ([`ContentError::LossyDecode`]): it decoded, but did not keep
-    ///    everything the bytes carried.
-    ///
-    /// Stage 3 re-encodes through `canonical_form` rather than through
-    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor)
-    /// deliberately: `canonical_form` is the function that *defines* this type's
-    /// identity, so it is the only re-encode whose equality proves the equation
-    /// above. For the recommended one-line implementation the two coincide; for a
-    /// type with its own canonical form they do not, and only this one is sound.
-    /// Exact byte equality is likewise stronger than comparing the two
+    /// That is the whole guarantee, and it is a claim about **bytes**, not about
+    /// the codec: it is established by re-encoding the decoded value and
+    /// comparing, not by appealing to dag-cbor being canonical. Exact byte
+    /// equality is also strictly stronger than comparing two
     /// [`ContentId`]s — it assumes no collision resistance.
     ///
-    /// Use [`canonical::from_canonical_dagcbor_checked`] for a plain `Serialize + Deserialize` value that is not
-    /// `ContentAddressable`. Added in `0.1.2` (issue #90) as a defaulted method,
-    /// so every implementor gets it for free; it carries `where Self: Sized`, so
-    /// the trait stays dyn-compatible.
+    /// ## Corollary for a lawful implementation
+    ///
+    /// Call an implementation **lawful** when its
+    /// [`content_id`](Self::content_id) agrees with the trait law —
+    /// `content_id() == ContentId::from_canonical_bytes(&canonical_form()?)`,
+    /// which the provided default satisfies by construction. For a lawful
+    /// implementation the invariant above gives:
+    ///
+    /// ```text
+    /// value.content_id()? == ContentId::from_canonical_bytes(bytes)
+    /// ```
+    ///
+    /// This is a **corollary, not a guarantee**. [`content_id`](Self::content_id)
+    /// is overridable, and an override that is not provably identical to the
+    /// default breaks the equation. Nothing here calls [`content_id`](Self::content_id), so **the
+    /// crate cannot detect that**. A caller who needs the equation held rather
+    /// than assumed checks it, with
+    /// [`ensure_content_id`](Self::ensure_content_id):
+    ///
+    /// ```text
+    /// value.ensure_content_id(&ContentId::from_canonical_bytes(bytes))?;
+    /// ```
+    ///
+    /// # Partial: the domain, and which prerequisite failed
+    ///
+    /// It succeeds on exactly those `bytes` that are
+    ///
+    /// 1. **canonical dag-cbor** — otherwise [`ContentError::DecodingError`] (not
+    ///    dag-cbor at all) or [`ContentError::NonCanonical`] (dag-cbor, but not
+    ///    the canonical encoding). Established generically, *before* any `Self`
+    ///    is constructed, so the result does not lean on this type's serde impl
+    ///    being well behaved;
+    /// 2. **directly deserializable as `Self`** — otherwise
+    ///    [`ContentError::DecodingError`];
+    /// 3. **reproduced byte-for-byte by the decoded value's [`canonical_form`](Self::canonical_form)** —
+    ///    otherwise [`ContentError::LossyDecode`].
+    ///
+    /// Every failure names the prerequisite that was not met.
+    ///
+    /// # Inverse on its domain, not universally
+    ///
+    /// For a type whose [`canonical_form`](Self::canonical_form) **is** its ordinary serde encoding — the
+    /// recommended one-liner — this is a left inverse of [`canonical_form`](Self::canonical_form):
+    /// round-tripping any value returns it. That is not true of every lawful
+    /// implementation, and the difference is worth stating plainly.
+    ///
+    /// A type may define a [`canonical_form`](Self::canonical_form) that is deliberately **not** its
+    /// serde representation — an envelope, a versioned framing, a projection —
+    /// and still be perfectly lawful for content addressing: its identity is
+    /// well defined and reproducible. But its canonical bytes are then not
+    /// directly deserializable as `Self` unless it also supplies a matching
+    /// `Deserialize`, so [`from_canonical_form`](Self::from_canonical_form) on its *own* output fails
+    /// prerequisite 2 with [`ContentError::DecodingError`].
+    ///
+    /// That is not a defect in the type and does not make its [`canonical_form`](Self::canonical_form)
+    /// unlawful. It means this method is checked ingress for the common
+    /// representation, not a universal inverse: a custom canonical form needs a
+    /// custom decoder to match it. What the method never does is *guess* —
+    /// it refuses rather than return a value the bytes do not reproduce.
+    ///
+    /// # Why stage 3 re-encodes through [`canonical_form`](Self::canonical_form)
+    ///
+    /// Deliberately, rather than through
+    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor):
+    /// [`canonical_form`](Self::canonical_form) is the function that *defines* this type's identity, so
+    /// it is the only re-encode whose equality proves the invariant. For the
+    /// recommended one-line implementation the two coincide; for a type with its
+    /// own canonical form they do not, and only this one is sound. It is also why
+    /// the bound is `DeserializeOwned + Sized` and not also `Serialize`.
+    ///
+    /// For a plain `Serialize + Deserialize` value that is not
+    /// [`ContentAddressable`](Self), use
+    /// [`canonical::from_canonical_dagcbor_checked`], whose stage 3 is
+    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor) instead.
     ///
     /// # Overriding
     ///
     /// Like [`content_id`](Self::content_id), override this only if you have a
     /// path that is *provably identical*. An override that skips a stage does
-    /// **not** weaken the store seam — `NodeStoreExt::get_node` deliberately runs
-    /// the shared body rather than this method, so a `T` cannot hand itself a
-    /// pass — but it does weaken every direct caller of `T::from_canonical_form`.
+    /// **not** weaken the store seam — `NodeStoreExt::get_node` (feature
+    /// `unstable-store`) deliberately runs the shared body rather than this
+    /// method, so a `T` cannot hand itself a pass — but it does weaken every
+    /// direct caller of `T::from_canonical_form`.
     ///
-    /// # Examples
+    /// # Availability
     ///
-    /// ```
-    /// use content_addressable::{canonical, ContentAddressable, ContentError, ContentId};
-    /// use serde::{Deserialize, Serialize};
-    ///
-    /// #[derive(Serialize, Deserialize, Debug, PartialEq)]
-    /// struct Record { name: String }
-    ///
-    /// impl ContentAddressable for Record {
-    ///     fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
-    ///         canonical::to_canonical_dagcbor(self)
-    ///     }
-    /// }
-    ///
-    /// let bytes = Record { name: "alpha".into() }.canonical_form()?;
-    /// let back = Record::from_canonical_form(&bytes)?;
-    ///
-    /// // The value that came back is the one those bytes name.
-    /// assert_eq!(back.content_id()?, ContentId::from_canonical_bytes(&bytes));
-    /// # Ok::<(), ContentError>(())
-    /// ```
+    /// Added in `0.1.2` (issue #90) as a defaulted associated function, so every
+    /// implementor gets it for free; it carries `where Self: Sized`, so the trait
+    /// stays dyn-compatible. It is the one deliberate exception `0.1.2` makes to
+    /// the otherwise frozen `0.1.x` Rust API — see `docs/STABILITY.md`.
     ///
     /// # Errors
     ///
-    /// - [`ContentError::NonCanonical`] — the bytes are valid CBOR but not the
-    ///   canonical encoding.
     /// - [`ContentError::DecodingError`] — the bytes are not dag-cbor, or do not
-    ///   decode as a `Self`.
-    /// - [`ContentError::LossyDecode`] — the decode dropped information: the
-    ///   decoded value's `canonical_form` differs from the input.
-    /// - [`ContentError::EncodingError`] — propagated from
-    ///   [`canonical_form`](Self::canonical_form).
+    ///   decode as a `Self` (prerequisites 1 and 2).
+    /// - [`ContentError::NonCanonical`] — the bytes are dag-cbor but not the
+    ///   canonical encoding (prerequisite 1).
+    /// - [`ContentError::LossyDecode`] — the decoded value's [`canonical_form`](Self::canonical_form)
+    ///   differs from the input (prerequisite 3).
+    /// - Anything [`canonical_form`](Self::canonical_form) itself returns,
+    ///   propagated verbatim — typically [`ContentError::EncodingError`].
     fn from_canonical_form(bytes: &[u8]) -> Result<Self, ContentError>
     where
         Self: DeserializeOwned + Sized,
@@ -232,23 +284,23 @@ pub trait ContentAddressable {
 /// caller name the verdict in its own vocabulary (the store seam calls it
 /// `RepresentationMismatch`, which can point at the id that lied). And it keeps a
 /// [`ContentError::LossyDecode`] that came out of the *caller's own*
-/// `canonical_form` distinguishable from this function's own byte comparison — an
+/// [`canonical_form`](crate::ContentAddressable::canonical_form) distinguishable from this function's own byte comparison — an
 /// error value alone could not tell the two apart, and the seam would blame the
 /// stored bytes for a failure inside the type's encoder.
 pub(crate) enum CheckedDecode<T> {
-    /// The bytes decoded as a `T` whose `canonical_form` reproduces them exactly.
+    /// The bytes decoded as a `T` whose [`canonical_form`](crate::ContentAddressable::canonical_form) reproduces them exactly.
     Value(T),
     /// The decode succeeded but lost information: the decoded value's
-    /// `canonical_form` differs from the input bytes.
+    /// [`canonical_form`](crate::ContentAddressable::canonical_form) differs from the input bytes.
     Lossy,
 }
 
 /// The crate's one identity-preserving decode: canonical bytes, a typed decode,
-/// and a forward re-encode through the type's own `canonical_form`.
+/// and a forward re-encode through the type's own [`canonical_form`](crate::ContentAddressable::canonical_form).
 ///
 /// This is the body of [`ContentAddressable::from_canonical_form`], factored out
 /// so the **store seam can run it without going through that method**.
-/// `from_canonical_form` is defaulted on an unsealed trait, so a downstream `T`
+/// [`from_canonical_form`](crate::ContentAddressable::from_canonical_form) is defaulted on an unsealed trait, so a downstream `T`
 /// can override it — including with a bare, unverified decode. A seam whose
 /// integrity guarantee routed through it would be handing that guarantee to `T`,
 /// which is precisely the bug class this line of work exists to close. Stage 3
@@ -259,7 +311,7 @@ pub(crate) enum CheckedDecode<T> {
 ///
 /// [`ContentError::NonCanonical`], [`ContentError::DecodingError`] and
 /// [`ContentError::EncodingError`] from the three stages, in that order. Whatever
-/// `canonical_form` returns is propagated **verbatim** — the lossy verdict
+/// [`canonical_form`](crate::ContentAddressable::canonical_form) returns is propagated **verbatim** — the lossy verdict
 /// travels as `Ok(`[`CheckedDecode::Lossy`]`)`, never as an error.
 pub(crate) fn checked_decode<T>(bytes: &[u8]) -> Result<CheckedDecode<T>, ContentError>
 where
