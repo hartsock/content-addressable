@@ -51,6 +51,52 @@ returns the typed `ContentError::NonCanonical` (or `DecodingError` for non-DAG-C
 The pairing is frozen as `from_canonical_bytes` / `from_canonical_bytes_checked`
 — the unchecked door is **not** renamed to `_unchecked`.
 
+**The same pairing extended to decoding** (`0.1.2`, [#90]).
+`canonical::from_canonical_dagcbor_checked` and the defaulted
+`ContentAddressable::from_canonical_form` verify a *typed* round trip: the bytes
+are canonical dag-cbor, and re-encoding the decoded value reproduces them
+byte-for-byte. That byte equality is the enforced invariant; the content-id
+equation follows from it only for a *lawful* implementation (one whose
+`content_id()` agrees with the trait law), because `content_id` is overridable
+and this crate cannot check an override — the full contract is stated once at
+`ContentAddressable::from_canonical_form`. `from_canonical_bytes_checked` cannot
+substitute for either: it re-encodes as generic IPLD, which keeps every key, so a
+typed decode that does not reproduce its input is structurally invisible to it.
+The bare `canonical::from_canonical_dagcbor` is **deprecated**; its behavior is
+unchanged for `0.1.x` and removing it is a major-version event.
+`ContentError::LossyDecode` was **added** under the enum's `#[non_exhaustive]`
+contract — the first use of the additive path the error policy below reserves.
+
+## The one `0.1.2` stability exception
+
+Version `0.1.2` makes one deliberate, narrow exception to the otherwise frozen
+`0.1.x` Rust API: it adds the **defaulted** associated function
+`ContentAddressable::from_canonical_form`.
+
+Adding a defaulted associated function to a public trait is RFC 1105's *minor /
+possibly breaking* category. A downstream type that implements
+`ContentAddressable` **and** receives an associated function of the same name
+from another trait in scope can now fail to compile with `error[E0034]: multiple
+applicable items in scope`. Disambiguate with fully qualified trait syntax:
+
+```rust
+<T as OtherTrait>::from_canonical_form(bytes)
+```
+
+The method's `where Self: DeserializeOwned` clause does **not** remove it from
+resolution for such an implementor — the ambiguity is resolved before the clause
+is considered — so the exposure is not limited to types that implement
+`Deserialize`. A `^0.1` dependency picks the new version up without an opt-in,
+which is why this is recorded here rather than left to be discovered.
+
+**Nothing else moved.** No wire bytes, no CID profile, no canonical encoding, no
+identifier, no existing method signature, and no existing runtime behavior is
+removed or changed. Every golden vector is byte-identical. The remainder of the
+`0.1.x` stability contract — everything else in this document — stays in force,
+and this exception does not license further ones. The other `0.1.2` additions (a
+free function, a `#[non_exhaustive]` error variant, a Python binding) carry no
+such exposure.
+
 ### Presentation contract ([#6])
 
 A `ContentId` names four distinct presentation forms, each frozen:
@@ -248,3 +294,4 @@ long-lived identity claims.
 [#10]: https://github.com/hartsock/content-addressable/issues/10
 [#71]: https://github.com/hartsock/content-addressable/issues/71
 [#84]: https://github.com/hartsock/content-addressable/issues/84
+[#90]: https://github.com/hartsock/content-addressable/issues/90

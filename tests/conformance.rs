@@ -214,3 +214,61 @@ fn pinned_cid_bytes_are_independently_reconstructible() {
         );
     }
 }
+
+/// Every golden vector survives the **checked** decoder and comes back naming the
+/// pinned identity (issue #90).
+///
+/// This is the positive half of `tests/checked_decode.rs`, which pins the
+/// refusals. A gate that refuses bad bytes is only worth having if it accepts
+/// every byte string the crate itself calls canonical; running the frozen vector
+/// set through it is the strongest available statement that the gate is not
+/// over-tight. If a future `serde_ipld_dagcbor` bump changed what round-trips,
+/// this fails here — on the frozen bytes — rather than downstream.
+///
+/// **Scope.** These are the *dag-cbor* vectors. `tests/raw_vectors.json` and
+/// `tests/legacy_vectors.json` pin the identities of **opaque byte strings** and
+/// of legacy identifier *text*; neither is a dag-cbor document, so a dag-cbor
+/// decoder has nothing to say about them. Running them through it would not be a
+/// stronger test, it would be a category error — the profile law is that the
+/// codec is part of the identity, and `raw` (`0x55`) is not `dag-cbor` (`0x71`).
+#[test]
+fn every_vector_survives_the_checked_decoder() {
+    for v in load_vectors() {
+        let bytes = hex_to_bytes(&v.canonical_dagcbor_hex);
+
+        // 1. The checked decoder accepts the pinned bytes.
+        let decoded: ipld_core::ipld::Ipld = canonical::from_canonical_dagcbor_checked(&bytes)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "[{}] the checked decoder rejected a GOLDEN vector: {e}",
+                    v.name
+                )
+            });
+
+        // 2. It gave back the value the vector says those bytes hold.
+        assert_eq!(
+            decoded,
+            json_value_to_ipld(&v.value),
+            "[{}] the checked decoder returned a different value",
+            v.name
+        );
+
+        // 3. Re-encoding it reproduces the pinned bytes and therefore the pinned
+        //    id — the round trip the checked door exists to guarantee, asserted
+        //    against the frozen cross-language authority rather than a fixture.
+        let reencoded = canonical::to_canonical_dagcbor(&decoded)
+            .unwrap_or_else(|e| panic!("[{}] re-encode failed: {e}", v.name));
+        assert_eq!(
+            bytes_to_hex(&reencoded),
+            v.canonical_dagcbor_hex,
+            "[{}] a decoded golden vector re-encoded to different bytes",
+            v.name
+        );
+        assert_eq!(
+            ContentId::from_canonical_bytes(&reencoded).to_string(),
+            v.content_id_str,
+            "[{}] the round trip moved the identity",
+            v.name
+        );
+    }
+}

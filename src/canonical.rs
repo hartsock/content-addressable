@@ -1,10 +1,10 @@
 //! Canonical serialization via IPLD dag-cbor.
 //!
-//! # dag-cbor *is* the canonical form
+//! # dag-cbor *is* the canonical form — **on the encode side**
 //!
 //! This crate does not implement its own canonicalization rules. It relies on
-//! the IPLD dag-cbor codec, whose encoding is **deterministic by
-//! construction**:
+//! the IPLD dag-cbor codec, whose **encoding** is deterministic by
+//! construction:
 //!
 //! - **Strict map key ordering.** Map keys are emitted in a fixed, defined
 //!   order, so two semantically-equal maps always produce identical bytes
@@ -16,12 +16,63 @@
 //! - **Smallest-form integers and no duplicate keys.**
 //!
 //! Because the codec enforces these rules, determinism is a property of the
-//! *encoder*, not of caller discipline. Callers do not need to sort fields,
-//! pick a field order, or avoid maps: `to_canonical_dagcbor` will always
-//! produce the same bytes for the same value.
+//! *encoder*, not of caller discipline. Callers do not need to sort fields or
+//! pick a field order: a `HashMap` and a `BTreeMap` of the same entries encode
+//! to identical bytes, because the codec sorts.
 //!
 //! This determinism is what makes content addressing sound: the same value
 //! hashes to the same [`ContentId`](crate::ContentId), always.
+//!
+//! Two limits on that sentence, both worth knowing before you rely on it.
+//! [`to_canonical_dagcbor`] succeeding does **not** prove its output is
+//! dag-cbor: dag-cbor map keys must be strings, and a map with non-string keys
+//! (e.g. `BTreeMap<u64, _>`) encodes without complaint into bytes this crate's
+//! own checked doors then refuse. And none of it says anything about **decoding**
+//! — see below.
+//!
+//! # Decoding: checked vs unchecked (issue #90)
+//!
+//! Encoding is canonical by construction; **decoding establishes nothing**.
+//! Determinism is a property of the encoder, so it says nothing about bytes that
+//! arrived from somewhere else. A plain `serde` decode into a type `T` can go
+//! wrong two independent ways:
+//!
+//! - **The bytes may not be canonical.** Valid-but-non-canonical CBOR
+//!   (reordered map keys, non-minimal integers, indefinite lengths) decodes
+//!   perfectly well and re-encodes to *different* bytes. Codec strictness has
+//!   also drifted between `serde_ipld_dagcbor` releases, so the decoder is not
+//!   the guarantee.
+//! - **The typed decode may not reproduce the bytes.** `serde` ignores unknown
+//!   map keys by default, so a record carrying a field that `T` does not name
+//!   decodes cleanly *with that field silently dropped*. A `#[serde(default)]`,
+//!   an alias, or a `T` whose canonical representation simply differs from its
+//!   serde one lands in the same place.
+//!
+//! Either way the value the caller ends up holding re-encodes to bytes that are
+//! **not** the bytes it was decoded from — so it has a different
+//! [`ContentId`](crate::ContentId) than its own source, and nothing said so.
+//! The only sound answer is a forward re-encode comparison, which is what
+//! [`from_canonical_dagcbor_checked`] performs.
+//!
+//! | Door | What it establishes | Use when |
+//! |------|---------------------|----------|
+//! | [`from_canonical_dagcbor`] (**deprecated**) | nothing | never — see its successors |
+//! | [`from_canonical_dagcbor_checked`] | the bytes are canonical, **and** `to_canonical_dagcbor(&t)` reproduces them | any `Serialize + Deserialize` value |
+//! | [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form) | the same, with `t.canonical_form()?` in place of [`to_canonical_dagcbor`] | the value is [`ContentAddressable`](crate::ContentAddressable) |
+//! | [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) | the bytes are canonical (generic `Ipld`; no type involved) | you want the *id* of foreign bytes, not a value |
+//!
+//! The two checked doors are **checked ingress**, not universal inverses, and
+//! their contract — the enforced byte-equality invariant, the conditional
+//! content-id corollary, and the exact domain each is partial on — is stated once
+//! at
+//! [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form).
+//! Read it there rather than reconstructing it from the variants.
+//!
+//! The `_checked` suffix follows the frozen
+//! [`from_canonical_bytes`](crate::ContentId::from_canonical_bytes) /
+//! [`from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked)
+//! pairing (see `docs/STABILITY.md`): the unverified door keeps the plain name,
+//! the verifying one carries the suffix.
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -48,17 +99,224 @@ pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentE
     })
 }
 
-/// Decode a value from canonical dag-cbor bytes.
+/// Decode a value from canonical dag-cbor bytes — **verifying nothing**.
+///
+/// # Deprecated since `0.1.2` (issue #90)
+///
+/// The name is a claim this function never checked. It is a bare
+/// `serde_ipld_dagcbor::from_slice`: it does not verify that `bytes` are the
+/// canonical encoding, and it does not verify that `T` kept what they carried.
+/// Either way the value handed back can re-encode to **different** bytes — and
+/// therefore carry a **different** [`ContentId`](crate::ContentId) than the bytes
+/// it was decoded from — with nothing said. Move to
+/// [`from_canonical_dagcbor_checked`], or to
+/// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form)
+/// when the type is [`ContentAddressable`](crate::ContentAddressable).
+///
+/// Deprecation is not removal: the behavior is unchanged for `0.1.x`, and
+/// removing or redefining the name is a major-version event. It is deprecated
+/// rather than fixed in place because a caller under a zero-warnings policy
+/// should be *told*, at the call site, that they are on the unverified path.
+///
+/// Every remaining honest use is an anti-vacuous probe — showing that some bytes
+/// really do decode, so that a sibling test's refusal is the *check* talking and
+/// not the codec. Those callers say so with a local `#[allow(deprecated)]`.
+///
+/// The two examples below are a pair, and only the pair is non-vacuous: a
+/// `compile_fail` block passes when compilation fails for *any* reason, so on its
+/// own it would keep passing if this function were renamed away. The second block
+/// must compile, which pins the function's continued existence; the first must
+/// not, which pins the attribute.
+///
+/// ```compile_fail
+/// #![deny(deprecated)]
+/// use content_addressable::canonical;
+///
+/// // A literal, not `to_canonical_dagcbor(&42u64)`: this block must contain
+/// // exactly ONE deprecatable call, or a future deprecation elsewhere in the
+/// // crate could satisfy `compile_fail` in its place.
+/// let bytes = [0x18u8, 0x2a]; // canonical dag-cbor for 42
+/// // Denied: this door does not verify its own name.
+/// let _: u64 = canonical::from_canonical_dagcbor(&bytes).unwrap();
+/// ```
+///
+/// ```
+/// # #[allow(deprecated)]
+/// # fn main() -> Result<(), content_addressable::ContentError> {
+/// use content_addressable::canonical;
+///
+/// let bytes = canonical::to_canonical_dagcbor(&42u64)?;
+/// let n: u64 = canonical::from_canonical_dagcbor(&bytes)?;
+/// assert_eq!(n, 42);
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// # Errors
 ///
-/// Returns [`ContentError::DecodingError`] if the bytes are not valid canonical
-/// dag-cbor for the target type.
+/// Returns [`ContentError::DecodingError`] when the bytes cannot be decoded as
+/// dag-cbor for the target type. It does not establish that the input was
+/// canonical, or that the typed round trip preserves the original bytes — use
+/// [`from_canonical_dagcbor_checked`] for either guarantee.
+#[deprecated(
+    since = "0.1.2",
+    note = "does not verify canonical form or the typed round trip, so the value it \
+returns can carry a different ContentId than the bytes it came from; use \
+from_canonical_dagcbor_checked (or ContentAddressable::from_canonical_form)"
+)]
 pub fn from_canonical_dagcbor<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ContentError> {
+    decode_dagcbor(bytes)
+}
+
+/// The bare typed decode: no canonicality check, no round-trip comparison.
+///
+/// Crate-internal so there is exactly one place where the codec's error is
+/// boxed, and so the two public doors ([`from_canonical_dagcbor`] and
+/// [`from_canonical_dagcbor_checked`]) share it rather than each calling
+/// `serde_ipld_dagcbor` directly.
+pub(crate) fn decode_dagcbor<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ContentError> {
     // Box the concrete `serde_ipld_dagcbor::DecodeError<…>` as a `dyn Error` so
     // the codec crate's generic does not leak into the frozen public signature
     // of `ContentError::DecodingError` (see error.rs freeze decisions).
     serde_ipld_dagcbor::from_slice(bytes).map_err(|source| ContentError::DecodingError {
         source: Box::new(source),
     })
+}
+
+/// Assert that `bytes` are the canonical dag-cbor encoding of the value they
+/// denote — **independently of any target type**.
+///
+/// Decodes to the generic [`Ipld`](ipld_core::ipld::Ipld) data model (which
+/// preserves every map key, so no type-shaped information is lost), re-encodes
+/// canonically, and requires byte equality. Because the codec emits the *unique*
+/// canonical form, equality proves the input already was it.
+///
+/// This is the single implementation of the canonicality gate: it is what
+/// [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked)
+/// and [`from_canonical_dagcbor_checked`] both run, so the two cannot drift.
+/// The gate is the same one [`from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked) has always applied —
+/// hoisted here, not redefined.
+///
+/// # Errors
+///
+/// - [`ContentError::DecodingError`] if `bytes` are not dag-cbor at all.
+/// - [`ContentError::NonCanonical`] if they decode but are not the canonical
+///   encoding.
+/// - [`ContentError::EncodingError`] if the decoded value cannot be re-encoded.
+pub(crate) fn ensure_canonical(bytes: &[u8]) -> Result<(), ContentError> {
+    let value: ipld_core::ipld::Ipld = decode_dagcbor(bytes)?;
+    if to_canonical_dagcbor(&value)? != bytes {
+        return Err(ContentError::NonCanonical);
+    }
+    Ok(())
+}
+
+/// **Checked ingress** for a plain `Serialize + Deserialize` value: decode, then
+/// prove the decoded value re-encodes to exactly the bytes it came from.
+///
+/// The verifying sibling of [`from_canonical_dagcbor`], and the door to reach
+/// for whenever the bytes did not come from [`to_canonical_dagcbor`] in this
+/// process. On success, and unconditionally:
+///
+/// ```text
+/// to_canonical_dagcbor(&from_canonical_dagcbor_checked::<T>(bytes)?)? == bytes
+/// ```
+///
+/// This is checked ingress and a **partial** inverse, never a universal one. The
+/// contract in full — that invariant, the *conditional* content-id corollary
+/// (which holds only for a lawful implementation and which this crate cannot
+/// enforce), and the exact domain the door is partial on — is stated once at
+/// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form).
+/// Read it there. This function is the same three stages with
+/// [`to_canonical_dagcbor`] in place of [`canonical_form`](crate::ContentAddressable::canonical_form), which is why it is the
+/// one that needs `T: Serialize`.
+///
+/// Three stages, in order, each with its own error so diagnostics say *who* is
+/// at fault:
+///
+/// 1. **Canonicality** — the bytes are the canonical
+///    encoding of the value they denote. Blames the **bytes**
+///    ([`ContentError::NonCanonical`]).
+/// 2. **Typed decode** — the bytes decode as a `T`. Blames the **bytes/type
+///    pair** ([`ContentError::DecodingError`]).
+/// 3. **Forward re-encode** — [`to_canonical_dagcbor`] on the decoded value
+///    reproduces the input byte-for-byte. Rejects the **bytes/type pairing**
+///    ([`ContentError::LossyDecode`]): the decode succeeded, but the value it
+///    produced is not one these bytes are the canonical encoding of. That does
+///    not by itself prove the type is defective, or that anything was lost.
+///    A dropped unknown field is the usual cause; a `#[serde(default)]`, an
+///    alias, or any other divergence between `T`'s two serde directions does
+///    the same.
+///
+/// Stage 3 is the one no generic check can perform:
+/// [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked)
+/// re-encodes as `Ipld`, which keeps every key, so a *typed* decode dropping a
+/// field is invisible to it. Exact byte equality is also strictly stronger than
+/// comparing the two [`ContentId`](crate::ContentId)s — it needs no
+/// collision-resistance assumption.
+///
+/// The cost is one generic decode + re-encode plus one typed decode + re-encode
+/// per call. Pay it when the byte provenance is not yours; when you produced the
+/// bytes yourself, you already know the answer.
+///
+/// If `T` implements [`ContentAddressable`](crate::ContentAddressable), prefer
+/// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form),
+/// which runs stage 3 through the type's own [`canonical_form`](crate::ContentAddressable::canonical_form) — the function
+/// that actually defines its identity.
+///
+/// # Examples
+///
+/// ```
+/// use content_addressable::{canonical, ContentError};
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize)]
+/// struct Wire { alpha: u64, zeta: u64 }
+///
+/// #[derive(Serialize, Deserialize, Debug, PartialEq)]
+/// struct OnlyAlpha { alpha: u64 }
+///
+/// let bytes = canonical::to_canonical_dagcbor(&Wire { alpha: 1, zeta: 26 })?;
+///
+/// // A faithful round trip is accepted.
+/// let ok = canonical::to_canonical_dagcbor(&OnlyAlpha { alpha: 1 })?;
+/// assert_eq!(
+///     canonical::from_canonical_dagcbor_checked::<OnlyAlpha>(&ok)?,
+///     OnlyAlpha { alpha: 1 },
+/// );
+///
+/// // Decoding the two-field record into the one-field type would drop `zeta`
+/// // and silently change the value's identity, so it is refused.
+/// assert!(matches!(
+///     canonical::from_canonical_dagcbor_checked::<OnlyAlpha>(&bytes),
+///     Err(ContentError::LossyDecode),
+/// ));
+/// # Ok::<(), ContentError>(())
+/// ```
+///
+/// # Errors
+///
+/// - [`ContentError::DecodingError`] — the bytes are not dag-cbor, or do not
+///   decode as a `T`.
+/// - [`ContentError::NonCanonical`] — the bytes are valid CBOR but not the
+///   canonical encoding.
+/// - [`ContentError::LossyDecode`] — typed round-trip mismatch: re-encoding the
+///   decoded value differs from the input, so these bytes are not its canonical
+///   representation. A dropped unknown field is the motivating case and the one
+///   with security consequences, but not the only way to get here.
+/// - [`ContentError::EncodingError`] — a re-encode failed.
+pub fn from_canonical_dagcbor_checked<T: DeserializeOwned + Serialize>(
+    bytes: &[u8],
+) -> Result<T, ContentError> {
+    // 1. The bytes are canonical — established WITHOUT trusting `T`, so the
+    //    verdict does not depend on `T`'s serde impl being well behaved.
+    ensure_canonical(bytes)?;
+    // 2. They decode as a `T`.
+    let value: T = decode_dagcbor(bytes)?;
+    // 3. …and `T` kept all of it. Byte inequality here is decisive: the value is
+    //    NOT the one these bytes name.
+    if to_canonical_dagcbor(&value)? != bytes {
+        return Err(ContentError::LossyDecode);
+    }
+    Ok(value)
 }

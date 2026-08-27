@@ -16,8 +16,11 @@
 //!   dag-cbor profile) with the same presentation forms. The two never compare
 //!   equal, even on identical digests — the codec is part of the identity
 //!   (issue #84).
-//! - [`to_canonical_dagcbor`] / [`from_canonical_dagcbor`] — the canonical
-//!   dag-cbor codec, applied to native Python values.
+//! - [`to_canonical_dagcbor`] / [`from_canonical_dagcbor`] /
+//!   [`from_canonical_dagcbor_checked`] — the canonical dag-cbor codec, applied
+//!   to native Python values. The plain decode is **unverified**; the `_checked`
+//!   one refuses bytes that are not the canonical encoding of what they decode
+//!   to (issue #90), mirroring the core's pairing.
 //! - [`content_id`] — `ContentId.from_canonical_bytes(to_canonical_dagcbor(x))`.
 //!
 //! Canonicalization and hashing are delegated to the core crate; the only work
@@ -395,18 +398,82 @@ fn ipld_to_py<'py>(py: Python<'py>, value: &Ipld) -> PyResult<Bound<'py, PyAny>>
     }
 }
 
-/// Decode canonical dag-cbor bytes back into a native Python value.
+/// Decode dag-cbor bytes back into a native Python value — **verifying nothing**.
 ///
-/// Inverse of [`to_canonical_dagcbor`]. Raises `ValueError` if the bytes are
-/// not valid canonical dag-cbor.
+/// Inverse of [`to_canonical_dagcbor`] for bytes that door produced. Raises
+/// `ValueError` if the bytes are not valid dag-cbor.
+///
+/// It does **not** verify that they are the CANONICAL encoding, despite the
+/// name — valid-but-non-canonical CBOR (reordered map keys, non-minimal
+/// integers) decodes here and re-encodes to *different* bytes, so the value you
+/// get back has a different content id than the bytes it came from, and nothing
+/// says so. (Before `0.1.2` this docstring claimed the check; it never ran.)
+/// For bytes you did not encode yourself, use
+/// [`from_canonical_dagcbor_checked`], which refuses exactly that.
 #[pyfunction]
 fn from_canonical_dagcbor<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-    // dag-cbor bytes -> serde Ipld value.
+    // dag-cbor bytes -> serde Ipld value. The core's UNVERIFIED door on purpose:
+    // this is the Python mirror of that door, and mirroring it is the whole
+    // contract (the core deprecated it in 0.1.2 to push callers CHOOSING a door,
+    // issue #90; a Python caller choosing this one has already chosen). Decoding
+    // to the generic Ipld model also means the typed-decode hazard cannot arise
+    // here — no field can be dropped when every key is kept — so the only hazard
+    // this door carries is non-canonical input, which is exactly what the checked
+    // sibling refuses.
+    #[allow(deprecated)]
     let value: Ipld = canonical::from_canonical_dagcbor(data)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     // serde Ipld value -> Python object via the hand-written converter (the
     // crate's shipped decode contract; see `ipld_to_py` for why it is kept even
     // though pythonize 0.29 can now serialize i128).
+    ipld_to_py(py, &value)
+}
+
+/// Decode dag-cbor bytes, **first verifying they are the canonical encoding**.
+///
+/// The checked sibling of [`from_canonical_dagcbor`], and the door to use for
+/// bytes that did not come from [`to_canonical_dagcbor`] in this process:
+/// foreign, stored, or off the wire. Valid-but-non-canonical CBOR (reordered map
+/// keys, non-minimal integers, indefinite lengths) decodes perfectly well and
+/// re-encodes *differently*, so the plain decode silently hands back a value
+/// whose identity is not the one it arrived under. That is what this refuses.
+///
+/// For a value the Python encoder can represent, that gives the equation the
+/// plain decode does not:
+///
+///     content_id(from_canonical_dagcbor_checked(b)) == ContentId.from_canonical_bytes(b)
+///
+/// **Known limitation — tag-42 links.** The equation is *not* available for bytes
+/// containing an IPLD link, because the Python codec is asymmetric about them and
+/// has been since it shipped: decoding maps a link to a `ContentId` object, while
+/// `to_canonical_dagcbor` (via `pythonize`) has no case for one and raises
+/// `TypeError`. So a link-bearing document decodes fine here — the canonicality
+/// check is sound, and `ContentId.from_canonical_bytes(b)` is still its correct
+/// id — but the value that comes back cannot be re-encoded, so you cannot
+/// re-derive the id *from the value*. The Python suite pins that as a known
+/// property rather than leaving it to be discovered.
+///
+/// Raises `ValueError` when the bytes are not dag-cbor at all, are valid CBOR but
+/// not its canonical encoding, or contain a link to a CID outside this crate's
+/// profile (the `ContentId` conversion refuses it, exactly as the plain decode
+/// does).
+///
+/// The core crate's third failure mode — a *typed* decode dropping a field the
+/// target type does not name — cannot arise here: Python decodes into the
+/// generic data model (`dict`/`list`/`int`/…), which keeps every key. There is no
+/// Python analogue of `ContentError::LossyDecode`, and `tests/` pins that as a
+/// property rather than leaving it assumed.
+#[pyfunction]
+fn from_canonical_dagcbor_checked<'py>(
+    py: Python<'py>,
+    data: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    // Delegated to the core crate's checked decoder — the SAME function the Rust
+    // face calls — so the two languages cannot disagree about what is canonical.
+    // `T = Ipld` here, so its typed re-encode stage coincides with its generic
+    // canonicality stage; the only reachable refusal is a non-canonical input.
+    let value: Ipld = canonical::from_canonical_dagcbor_checked(data)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     ipld_to_py(py, &value)
 }
 
@@ -440,6 +507,7 @@ fn content_addressable(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRawContentId>()?;
     m.add_function(wrap_pyfunction!(to_canonical_dagcbor, m)?)?;
     m.add_function(wrap_pyfunction!(from_canonical_dagcbor, m)?)?;
+    m.add_function(wrap_pyfunction!(from_canonical_dagcbor_checked, m)?)?;
     m.add_function(wrap_pyfunction!(content_id, m)?)?;
     Ok(())
 }

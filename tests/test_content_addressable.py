@@ -25,6 +25,7 @@ from content_addressable import (
     RawContentId,
     content_id,
     from_canonical_dagcbor,
+    from_canonical_dagcbor_checked,
     to_canonical_dagcbor,
 )
 
@@ -377,6 +378,166 @@ def test_unsupported_type_raises_type_error():
 
 
 # --------------------------------------------------------------------------- #
+# Checked decode: the two negative vectors from issue #90
+# --------------------------------------------------------------------------- #
+#
+# The Rust core's `from_canonical_dagcbor` never compared the bytes it was handed
+# against the canonical encoding of the value it returned, so a decoded value
+# could carry a DIFFERENT ContentId than its own source. The Python face mirrors
+# both doors: the plain one is unverified (and is the anti-vacuous control arm
+# below), `from_canonical_dagcbor_checked` refuses.
+#
+# Only ONE of the two Rust hazards can reach Python, and the asymmetry is
+# structural, not an omission:
+#
+#   * NON-CANONICAL BYTES — reachable. Pinned by the first two tests.
+#   * A LOSSY TYPED DECODE — NOT reachable. Rust drops unknown fields because it
+#     decodes into a *typed* T that does not name them. Python decodes into the
+#     generic data model (dict/list/int/...), which keeps every key, so there is
+#     no field for it to drop. The third test pins that as a property rather than
+#     leaving it an untested assumption: the very bytes that make Rust's checked
+#     decoder raise LossyDecode round-trip exactly here.
+
+# `{"bb": 1, "a": 2}` with the keys emitted in the WRONG order — valid CBOR, not
+# canonical dag-cbor (canonical is length-first, then bytewise).
+REORDERED_KEYS = bytes([0xA2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02])
+# `{"a": 1}` with `1` in the two-byte uint8 form (0x18 0x01) instead of the
+# smallest form (0x01) — valid CBOR, not canonical dag-cbor.
+NON_MINIMAL_INT = bytes([0xA1, 0x61, 0x61, 0x18, 0x01])
+
+
+@pytest.mark.parametrize(
+    "name,raw",
+    [("reordered_keys", REORDERED_KEYS), ("non_minimal_int", NON_MINIMAL_INT)],
+)
+def test_checked_decode_refuses_non_canonical_bytes(name, raw):
+    with pytest.raises(ValueError):
+        from_canonical_dagcbor_checked(raw)
+
+
+@pytest.mark.parametrize(
+    "name,raw",
+    [("reordered_keys", REORDERED_KEYS), ("non_minimal_int", NON_MINIMAL_INT)],
+)
+def test_unchecked_decode_accepts_them_and_the_identity_shifts(name, raw):
+    """The anti-vacuous twin, and the hazard itself, in one place.
+
+    These bytes decode perfectly well — so the refusal above is the CHECK
+    talking, not the codec's strictness. And the value that comes back
+    re-encodes to DIFFERENT bytes, so its content id is not the id of the bytes
+    it was decoded from. Nothing said so; that is the whole defect.
+    """
+    value = from_canonical_dagcbor(raw)
+    assert to_canonical_dagcbor(value) != raw
+    assert content_id(value) != ContentId.from_canonical_bytes(raw)
+
+
+def test_a_python_decode_cannot_drop_a_field():
+    """Rust's LossyDecode hazard has no Python analogue — pinned, not assumed.
+
+    `{"alpha": 1, "zeta": 26}` is exactly the record that makes Rust's checked
+    decoder raise LossyDecode when the target type names only `alpha`. Python
+    decodes into a dict, which names everything, so the round trip is exact and
+    the checked door accepts it.
+    """
+    record = {"alpha": 1, "zeta": 26}
+    raw = to_canonical_dagcbor(record)
+    assert from_canonical_dagcbor_checked(raw) == record
+    assert to_canonical_dagcbor(from_canonical_dagcbor_checked(raw)) == raw
+    assert content_id(record) == ContentId.from_canonical_bytes(raw)
+
+
+def test_checked_decode_accepts_canonical_bytes_and_preserves_identity():
+    for value in [None, True, 0, -1, 42, "hello", b"bytes", [1, [2]], {}, {"a": 1}]:
+        raw = to_canonical_dagcbor(value)
+        assert from_canonical_dagcbor_checked(raw) == value
+        assert (
+            content_id(from_canonical_dagcbor_checked(raw))
+            == ContentId.from_canonical_bytes(raw)
+        ), f"identity must survive the checked round trip for {value!r}"
+
+
+def test_checked_decode_rejects_non_cbor_garbage():
+    with pytest.raises(ValueError):
+        from_canonical_dagcbor_checked(b"\xff\xff\xff\xff")
+
+
+# --------------------------------------------------------------------------- #
+# tag-42 links: what the checked door does and does NOT promise
+# --------------------------------------------------------------------------- #
+#
+# The Python codec is asymmetric about links and has been since it shipped:
+# `ipld_to_py` maps `Ipld::Link` to a `ContentId` object, while the encode side
+# (`pythonize`) has no case for a `ContentId` and raises TypeError. That predates
+# this door; what it means for the door is pinned here rather than left to be
+# discovered, because links are dag-cbor's headline feature and every Merkle node
+# carries one.
+
+
+def _link_bytes(cid):
+    """Canonical dag-cbor for a bare tag-42 link to `cid` (0x00 multibase prefix).
+
+    `d8 2a` (tag 42) + `58 <len>` (byte string, one-byte length — the payload is
+    37 bytes, above the 23-byte inline limit and well below 256).
+    """
+    payload = b"\x00" + cid.to_bytes()
+    return bytes([0xD8, 0x2A, 0x58, len(payload)]) + payload
+
+
+def test_the_checked_door_accepts_a_canonical_link():
+    """Canonicality is sound for links; only the *re-encode* is unavailable.
+
+    Acceptance by the checked door IS the canonicality proof — it refuses
+    anything whose IPLD re-encoding differs from the input.
+    """
+    cid = content_id({"a": 1})
+    raw = _link_bytes(cid)
+    assert from_canonical_dagcbor_checked(raw) == cid
+    assert isinstance(from_canonical_dagcbor_checked(raw), ContentId)
+
+
+def test_a_decoded_link_cannot_be_re_encoded_yet():
+    """The known limitation, stated as a test so it cannot surprise anyone.
+
+    A link decodes to a `ContentId` object, and `to_canonical_dagcbor` cannot
+    represent one — so `content_id(from_canonical_dagcbor_checked(b))` raises
+    instead of returning `ContentId.from_canonical_bytes(b)`. Validate the bytes,
+    then mint from the *bytes*, never from the decoded value.
+    """
+    cid = content_id({"a": 1})
+    raw = _link_bytes(cid)
+    decoded = from_canonical_dagcbor_checked(raw)
+    with pytest.raises(TypeError):
+        to_canonical_dagcbor(decoded)
+    # The same limitation nested inside an ordinary record.
+    nested = bytes([0xA1, 0x64]) + b"link" + raw
+    value = from_canonical_dagcbor_checked(nested)
+    assert value == {"link": cid}
+    with pytest.raises(TypeError):
+        to_canonical_dagcbor(value)
+    # The supported recipe still works: validate the bytes with the checked door,
+    # then mint from those same bytes rather than from the decoded value.
+    validated = from_canonical_dagcbor_checked(nested)  # raises if non-canonical
+    assert validated == {"link": cid}
+    minted = ContentId.from_canonical_bytes(nested)
+    assert str(minted).startswith("b") and len(minted.digest_hex()) == 64
+
+
+def test_checked_decode_rejects_a_link_to_a_foreign_cid():
+    """A canonical link whose CID is off-profile is a ValueError, not a pass.
+
+    The bytes ARE canonical dag-cbor, so the canonicality stage says nothing; the
+    refusal comes from the `ContentId` conversion, the same profile law the plain
+    decoder enforces (see tests/test_profile_validation.py).
+    """
+    foreign_link = bytes.fromhex("d82a58250001711220" + "07" * 32)
+    with pytest.raises(ValueError):
+        from_canonical_dagcbor_checked(foreign_link)
+    with pytest.raises(ValueError):
+        from_canonical_dagcbor(foreign_link)
+
+
+# --------------------------------------------------------------------------- #
 # Module surface
 # --------------------------------------------------------------------------- #
 
@@ -387,6 +548,7 @@ def test_module_all_and_doc():
         "RawContentId",
         "to_canonical_dagcbor",
         "from_canonical_dagcbor",
+        "from_canonical_dagcbor_checked",
         "content_id",
     }
     assert ca.__doc__

@@ -15,6 +15,167 @@ Two distributions ship from this one repository and share a version:
 The PyPI **distribution** name is `content-addressable` (hyphen); the **import**
 name is `content_addressable` (underscore).
 
+## Unreleased — the decode side of the contract
+
+Lands as `0.1.2`; the package version is bumped in a separate release PR, as
+`0.1.1` was ([#86]).
+
+This release closes the hole on the *other* side of the codec — decoding ([#90]).
+Every golden vector is byte-identical and identifiers minted under `0.1.0` /
+`0.1.1` remain valid. It is **not** purely additive, and says so: it makes **one
+deliberate, narrow exception** to the otherwise frozen `0.1.x` Rust API, recorded
+under *Stability exception* below.
+
+**The defect.** `canonical::from_canonical_dagcbor` was a bare
+`serde_ipld_dagcbor::from_slice`. It never compared the bytes it was handed
+against the canonical encoding of the value it returned, so a decoded value could
+re-encode to **different** bytes and therefore carry a **different** `ContentId`
+than its own source — silently. Two independent causes: the bytes may not have
+been canonical (reordered map keys, non-minimal integers — all of which decode
+fine), or the target type may have dropped a field it does not name (`serde`
+ignores unknown map keys by default; for a protocol record that field may have
+been a required demand). `ContentId::from_canonical_bytes_checked` catches the
+first but *structurally cannot* catch the second: it re-encodes as generic IPLD,
+which keeps every key. Only a **typed** round trip sees it.
+
+### Added
+
+- **`canonical::from_canonical_dagcbor_checked<T: DeserializeOwned + Serialize>`**
+  — decode, then prove the round trip. Three stages, each naming a different
+  party: the bytes are canonical (`NonCanonical` blames the **bytes**), they
+  decode as a `T` (`DecodingError`), and re-encoding the value reproduces them
+  byte-for-byte (`LossyDecode` blames the bytes/type **pairing** — these bytes
+  are not that type's canonical representation of what it decoded). Exact byte
+  equality is stronger than comparing the two ids — it assumes no collision
+  resistance.
+- **`ContentAddressable::from_canonical_form`** — the same guarantee as a
+  defaulted trait method, so the ergonomic path is the safe one. It re-encodes
+  through the type's own `canonical_form` (the function that *defines* its
+  identity), not through `to_canonical_dagcbor`, which is why its bound is
+  `DeserializeOwned + Sized` and not also `Serialize`. It carries
+  `where Self: Sized`, so the trait stays dyn-compatible.
+
+  The enforced guarantee is **byte equality**, and the method never calls
+  `content_id`:
+
+  ```rust
+  let value = T::from_canonical_form(b)?;
+  assert_eq!(value.canonical_form()?, b);
+  ```
+
+  `value.content_id()? == ContentId::from_canonical_bytes(b)` follows only as a
+  **corollary for a lawful implementation** — one whose `content_id()` obeys the
+  trait law. `content_id` is overridable and nothing here calls it, so the crate
+  cannot enforce the corollary; use `ensure_content_id` when it must be held
+  rather than assumed. The returned value has the same canonical representation
+  and identity as the input bytes, but is not necessarily *equal* to a previously
+  encoded in-memory value — a `#[serde(skip)]` field is absent from the encoding,
+  so two values differing only in it share identical canonical bytes and the
+  decode returns the default. (A plain `#[serde(default)]` field is not such a
+  case: it is written back on re-encode, so it produces a `LossyDecode` mismatch
+  unless it is also omitted when serializing.)
+
+  This is the one addition covered by the *Stability exception* below.
+- **`ContentError::LossyDecode`** — added under the enum's `#[non_exhaustive]`
+  contract, which the `0.1.0` error policy kept for exactly this. It carries no
+  `source`, like `NonCanonical`: nothing failed underneath, a comparison simply
+  came out unequal. The `error` module's operation → variant map gains a row
+  (rows may be *added* per its own freeze note).
+- **Python: `from_canonical_dagcbor_checked`** — delegating to the same core
+  function the Rust face calls, so the two languages cannot disagree about what is
+  canonical. Python had no canonicality gate of any kind before this. The
+  `LossyDecode` half has no Python analogue and cannot: Python decodes into the
+  generic model, which keeps every key, so no field can be dropped. The test
+  suite pins that as a property rather than leaving it assumed.
+
+### Stability exception
+
+Version `0.1.2` makes **one deliberate, narrow exception** to the otherwise
+frozen `0.1.x` Rust API: it adds the defaulted associated function
+`ContentAddressable::from_canonical_form`.
+
+Adding a defaulted associated function to a public trait is RFC 1105's *minor /
+possibly breaking* category. A downstream type that implements
+`ContentAddressable` **and** receives an associated function of the same name
+from another trait in scope can now fail with `error[E0034]: multiple applicable
+items in scope`. Disambiguate with fully qualified trait syntax:
+
+```rust
+<T as OtherTrait>::from_canonical_form(bytes)
+```
+
+The method's `where Self: DeserializeOwned` clause does **not** remove it from
+resolution for such an implementor, so the exposure is not limited to types that
+implement `Deserialize`. A `^0.1` dependency picks this up without an opt-in,
+which is why it is recorded rather than left to be discovered.
+
+No wire bytes, CID profile, canonical encoding, identifier, existing method
+signature, or existing runtime behavior is removed or changed. The remainder of
+the `0.1.x` stability contract stays in force, and this exception does not
+license further ones. See `docs/STABILITY.md`.
+
+### Deprecated
+
+- **`canonical::from_canonical_dagcbor`** — it verifies neither canonical form
+  nor the typed round trip, and its name says otherwise. Behavior is
+  **unchanged** for `0.1.x`; removal is a major-version event. Successors:
+  `from_canonical_dagcbor_checked`, or `ContentAddressable::from_canonical_form`
+  when the type is `ContentAddressable`. Deprecation rather than a silent fix so
+  that a consumer under a zero-warnings policy is told, at the call site, that
+  they are on the unverified path. The Python `from_canonical_dagcbor` keeps its
+  behavior as the deliberate mirror of that door.
+
+### Fixed
+
+- **A `tag-42` link cannot be re-encoded from Python.** The Python codec has been
+  asymmetric about links since it shipped: decoding maps one to a `ContentId`
+  object, while `to_canonical_dagcbor` has no case for a `ContentId` and raises
+  `TypeError`. The asymmetry itself is unchanged (fixing it means rewriting the
+  Python encode path, which is not this release's business), but it is now
+  **documented and pinned by tests** in the README, the new door's docstring, and
+  the Python suite: a link-bearing document decodes fine and
+  `ContentId.from_canonical_bytes(b)` is still its correct id, but you must mint
+  from the *bytes*, never from the decoded value. Rust has no such gap.
+- **`tests/test_profile_validation.py`'s foreign-link fixture was malformed** — 44
+  bytes for a CBOR item declaring 41, so every decode of it failed in the codec
+  with `TrailingData` *before* the profile check, and the only Python test
+  guarding that path had never once exercised it. Corrected, parametrized over
+  both decode doors, the error message asserted, and a structural guard added so
+  the fixture cannot silently go malformed again.
+- **The Python `from_canonical_dagcbor` docstring claimed a check that never
+  ran** — "Raises ValueError if the bytes are not valid canonical dag-cbor". It
+  did not verify canonicality. The docstring now states what the function does
+  and points at the checked door.
+- **One canonicality implementation, not two.** The gate
+  `ContentId::from_canonical_bytes_checked` applies is now a single shared
+  function, and `NodeStoreExt::get_node` — which had open-coded exactly the three
+  stages `ContentAddressable::from_canonical_form` performs — shares that body.
+  Behavior is unchanged in both; they can no longer drift apart.
+
+  `get_node` runs the **shared body**, not the trait method: `from_canonical_form`
+  is defaulted on an unsealed trait, so a `T` that overrode it could otherwise
+  have switched the seam's whole check off. Stages 1 and 2 (canonicality, then the
+  typed decode) stay type-independent and out of `T`'s reach; stage 3 necessarily
+  consults `T::canonical_form`, which is what identity *means* for a
+  `ContentAddressable`. The lossy verdict travels as a value rather than an error,
+  so a `LossyDecode` raised inside a caller's own `canonical_form` is still
+  propagated verbatim instead of being relabelled `RepresentationMismatch`.
+
+### Notes
+
+- No wire bytes changed. `tests/vectors.json`, `tests/raw_vectors.json` and
+  `tests/legacy_vectors.json` are untouched, and every vector in the DAG-CBOR set
+  is now additionally asserted to survive the checked decoder and come back naming
+  the pinned id — a gate that refuses bad bytes is only worth having if it accepts
+  everything the crate itself calls canonical.
+- The raw and legacy vector sets are deliberately **not** run through it: they pin
+  the identities of opaque byte strings and of legacy identifier text, neither of
+  which is a DAG-CBOR document. The profile law is that the codec is part of the
+  identity.
+
+[#90]: https://github.com/hartsock/content-addressable/issues/90
+[#86]: https://github.com/hartsock/content-addressable/pull/86
+
 ## [0.1.1] — the identity/classification layer
 
 Additive: the frozen `0.1.0` core contract is **untouched**, every golden vector

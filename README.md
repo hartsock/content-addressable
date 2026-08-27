@@ -42,11 +42,19 @@ computes for the same canonical IPLD value.
 
 ## Status & stability
 
-The package is **`0.1.0`** — the first release that freezes the core contract.
-The core byte/wire and API contracts are locked for the whole `0.1.x` line
-(changing any is a breaking release outside `0.1.x`), while the optional
-`unstable-merkle` / `unstable-store` features are explicitly still moving and are
-named to say so.
+The core byte/wire and API contracts have been locked since `0.1.0` and hold for
+the whole `0.1.x` line (changing any is a breaking release outside `0.1.x`),
+while the optional `unstable-merkle` / `unstable-store` features are explicitly
+still moving and are named to say so.
+
+**One recorded exception.** `0.1.2` adds the defaulted associated function
+`ContentAddressable::from_canonical_form`, which is RFC 1105 *minor / possibly
+breaking*: a downstream type that also receives a `from_canonical_form` from
+another trait in scope can hit `error[E0034]`, and the fix is fully qualified
+trait syntax, `<T as OtherTrait>::from_canonical_form(bytes)`. No wire bytes, CID
+profile, canonical encoding, identifier, existing signature, or existing behavior
+changed. The rest of the `0.1.x` contract stays in force — see
+[`docs/STABILITY.md`](docs/STABILITY.md) ([#90]).
 
 | Surface | Default | Stability |
 |---------|:-------:|-----------|
@@ -59,6 +67,7 @@ named to say so.
 | `unstable-migration` feature | No | **Experimental** — `IdentityMigration` record (from → to, reason); field names NOT frozen |
 
 [#84]: https://github.com/hartsock/content-addressable/issues/84
+[#90]: https://github.com/hartsock/content-addressable/issues/90
 
 Details and rationale: [`docs/STABILITY.md`](docs/STABILITY.md).
 
@@ -174,12 +183,51 @@ precondition — it is **not** universally safe.
 |----------|---------------------|----------|
 | Hash a normal value | `value.content_id()` / `content_id(value)` | **Preferred safe path** |
 | Encode a value to bytes | `canonical::to_canonical_dagcbor(v)` / `to_canonical_dagcbor(v)` | Produces canonical DAG-CBOR |
-| Accept foreign / untrusted bytes | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: *no single checked constructor yet* | Validates DAG-CBOR canonicality; errors on non-canonical |
+| Accept foreign / untrusted bytes (id only) | Rust: `ContentId::from_canonical_bytes_checked(b)` · Python: `from_canonical_dagcbor_checked(b)` to validate, then `ContentId.from_canonical_bytes(b)` | Validates DAG-CBOR canonicality; errors on non-canonical. Python still has no single checked *constructor*: validate the bytes, then mint from the same bytes — do **not** re-derive the id from the decoded value, which fails for link-bearing documents (see below) |
 | Hash already-trusted canonical bytes | `ContentId::from_canonical_bytes(b)` | **Unchecked** precondition: caller asserts `b` is canonical DAG-CBOR |
 | Identify opaque bytes (a file, chunk, binary, payload) | `RawContentId::from_content(b)` / `RawContentId.from_content(b)` | Hashes the bytes; nothing to get wrong — the bytes *are* the content |
 | Wrap an existing BLAKE3 digest **of opaque bytes** | `RawContentId::from_blake3_digest(d)` / `RawContentId.from_blake3_digest(d)` | No rehash; the honest home of the no-rehash bridge (byte-identical to kyln raw CIDs / bare `blake3` digests) |
 | Wrap an existing BLAKE3 digest **known to be over canonical DAG-CBOR** | `ContentId::from_dag_cbor_digest(d)` / `ContentId.from_dag_cbor_digest(d)` | No rehash; the name asserts the precondition. `from_blake3_content_digest` is **deprecated** in its favor ([#84]): it stamped DAG-CBOR on a digest it could not know came from DAG-CBOR |
 | Hold a CID you did not mint (REAPI `sha2-256`, CIDv0, …) | `ClassifiedCid::from_str` / `ClassifiedCid::from_bytes` / `ClassifiedCid::from_cid` | Classifies as `Content` / `Raw` / `Foreign`; foreign ids are carried and compared, never minted |
+
+## Decoding foreign bytes
+
+Encoding is safe by construction. **Decoding is not.** A plain `serde` decode
+hands back a value that may re-encode to *different* bytes — and so carry a
+**different** `ContentId` than the bytes it was decoded from — with nothing
+said. Two independent causes:
+
+1. **The bytes were not canonical.** Reordered map keys, non-minimal integers,
+   indefinite lengths: valid CBOR, not canonical DAG-CBOR. They decode, and
+   re-encode differently.
+2. **The type dropped what it does not name.** `serde` ignores unknown map keys,
+   so a record carrying a field your type has no place for decodes cleanly *with
+   the field gone*. For a protocol record that may have been a required demand.
+
+Cause 2 is invisible to `from_canonical_bytes_checked`, which re-encodes as
+generic IPLD and therefore keeps every key — only a **typed** round trip sees it.
+
+| Use case | API (Rust / Python) | Contract |
+|----------|---------------------|----------|
+| Decode foreign bytes into a `ContentAddressable` type | `T::from_canonical_form(b)` / — | Canonical bytes **and** `canonical_form` reproduces them: the value is provably the one `b` names |
+| Decode foreign bytes into any `Serialize + Deserialize` type | `canonical::from_canonical_dagcbor_checked::<T>(b)` / `from_canonical_dagcbor_checked(b)` | Canonical bytes **and** `to_canonical_dagcbor` on the decoded value reproduces them |
+| Decode bytes you just encoded yourself | `canonical::from_canonical_dagcbor(b)` / `from_canonical_dagcbor(b)` | **Deprecated (Rust, 0.1.2)** — verifies neither of the above |
+
+A failed check names the party at fault: `ContentError::NonCanonical` blames the
+bytes, `ContentError::LossyDecode` blames the bytes/type *pairing* — these bytes
+are not that type's canonical representation of what it decoded. A dropped
+unknown field is the motivating case; a type whose canonical form intentionally
+differs from its serde representation reaches the same verdict without losing
+anything. In Python only the first is reachable — decoding into `dict`/`list` keeps every key, so no field can be
+dropped ([#90]).
+
+> **Python, tag-42 links.** The Python codec is asymmetric about links and has
+> been since it shipped: decoding maps one to a `ContentId` object, while
+> `to_canonical_dagcbor` has no case for a `ContentId` and raises `TypeError`. A
+> link-bearing document therefore *decodes* fine — the canonicality check is
+> sound, and `ContentId.from_canonical_bytes(b)` is still its correct id — but the
+> value that comes back cannot be re-encoded, so the id cannot be re-derived from
+> the value. Pinned by the Python suite as a known property. Rust has no such gap.
 
 ## Presentation forms
 
@@ -324,8 +372,8 @@ catalog. **The `store` trait/API is experimental and NOT frozen.**
 The frozen `0.1.x` contracts — CID profile, presentation, serde representation,
 error policy, `verify`/`ensure_content_id`, crate-root exports, MSRV/edition, the
 no-rehash digest bridge, and the experimental-feature exclusions — are recorded
-in [`docs/STABILITY.md`](docs/STABILITY.md), with issue provenance. Treat the
-frozen surfaces as durable.
+in [`docs/STABILITY.md`](docs/STABILITY.md), with issue provenance, together with
+the single `0.1.2` exception noted above. Treat the frozen surfaces as durable.
 
 ## Development
 

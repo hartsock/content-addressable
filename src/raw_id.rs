@@ -37,7 +37,7 @@
 //! [`to_bytes`](RawContentId::to_bytes)/[`from_bytes`](RawContentId::from_bytes)
 //! are the CID binary envelope, [`digest_bytes`](RawContentId::digest_bytes)/
 //! [`digest_hex`](RawContentId::digest_hex) are the bare 32-byte digest. The
-//! serde form is the same as `ContentId`'s: a tag-42 link in binary/IPLD
+//! serde form is the same as [`ContentId`]'s: a tag-42 link in binary/IPLD
 //! formats, the base32-lower string in human-readable ones. Every ingress path
 //! validates the raw profile, so a `RawContentId` (however it entered) always
 //! carries it and every accessor is total.
@@ -83,8 +83,8 @@ impl RawContentId {
     /// whose "MUST be canonical dag-cbor" precondition exists because a
     /// dag-cbor id names a *value*, not the bytes.)
     ///
-    /// Named `from_content` rather than `from_bytes` on purpose: across both
-    /// profiles `from_bytes`/`to_bytes` always mean the **CID binary envelope**
+    /// Named [`from_content`](RawContentId::from_content) rather than [`from_bytes`](RawContentId::from_bytes) on purpose: across both
+    /// profiles [`from_bytes`](RawContentId::from_bytes)/[`to_bytes`](RawContentId::to_bytes) always mean the **CID binary envelope**
     /// (the presentation contract), never "hash these bytes".
     #[must_use]
     pub fn from_content(content: &[u8]) -> Self {
@@ -386,11 +386,26 @@ mod tests {
         let cbor = crate::canonical::to_canonical_dagcbor(&id).unwrap();
         // dag-cbor tag 42 = 0xd8 0x2a, then a byte string with the 0x00 prefix.
         assert_eq!(&cbor[..2], &[0xd8, 0x2a]);
-        let back: RawContentId = crate::canonical::from_canonical_dagcbor(&cbor).unwrap();
+        let back: RawContentId = crate::canonical::from_canonical_dagcbor_checked(&cbor).unwrap();
         assert_eq!(back, id);
         // A dag-cbor link to a *ContentId* does not deserialize as a RawContentId.
+        //
+        // The VARIANT is asserted, not merely `is_err()`. `RawContentId` stores
+        // the profile in its `Cid`, so a mutant `Deserialize` that dropped the
+        // profile gate and rebuilt the id from the bare digest would re-serialize
+        // with the raw codec `0x55` instead of the input's dag-cbor `0x71` — and
+        // the checked door's stage-3 byte comparison would refuse it with
+        // `LossyDecode`. `is_err()` would stay green on a genuine reintroduction
+        // of profile aliasing at the serde boundary; `DecodingError` is the
+        // boundary refusal this test exists to prove, and only that.
         let dag = ContentId::from_dag_cbor_digest(id.digest_bytes());
         let cbor_dag = crate::canonical::to_canonical_dagcbor(&dag).unwrap();
-        assert!(crate::canonical::from_canonical_dagcbor::<RawContentId>(&cbor_dag).is_err());
+        let err = crate::canonical::from_canonical_dagcbor_checked::<RawContentId>(&cbor_dag)
+            .expect_err("a dag-cbor link must not deserialize as a RawContentId");
+        assert!(
+            matches!(err, ContentError::DecodingError { .. }),
+            "the profile must be refused at the serde BOUNDARY (DecodingError), not \
+             caught later by the re-encode comparison, got {err:?}"
+        );
     }
 }

@@ -90,7 +90,7 @@ use crate::trait_def::ContentAddressable;
 /// `MerkleNode<T>` implements [`ContentAddressable`] with the one-line
 /// [`canonical_form`](ContentAddressable::canonical_form) deferring to
 /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor), so
-/// `content_id` / `verify` come for free and the id is over the *whole* node
+/// [`content_id`](crate::ContentAddressable::content_id) / [`verify`](crate::ContentAddressable::verify) come for free and the id is over the *whole* node
 /// including its parent links.
 ///
 /// # ⚠️ Non-frozen bytes
@@ -219,7 +219,7 @@ mod tests {
 
     /// A stand-in parent id, minted from canonical bytes the same way the rest
     /// of the crate does. The exact bytes don't matter — only that it is a real
-    /// `ContentId` that serializes as a tag-42 link.
+    /// [`ContentId`] that serializes as a tag-42 link.
     fn id_for(payload: &str) -> ContentId {
         MerkleNode::genesis(payload.to_string()).id().unwrap()
     }
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_verify() {
-        // A node survives to_canonical_dagcbor -> from_canonical_dagcbor for a
+        // A node survives to_canonical_dagcbor -> from_canonical_dagcbor_checked for a
         // concrete payload, and verify() returns Ok(true) against its own id.
         let parent = id_for("parent");
         let node = MerkleNode::new(event("alice", "hi"), [parent]);
@@ -391,7 +391,7 @@ mod tests {
         );
 
         let bytes = node.canonical_form().unwrap();
-        let back: MerkleNode<Event> = canonical::from_canonical_dagcbor(&bytes).unwrap();
+        let back: MerkleNode<Event> = canonical::from_canonical_dagcbor_checked(&bytes).unwrap();
         assert_eq!(node, back, "a node must survive a dag-cbor roundtrip");
         assert!(
             back.verify(&id).unwrap(),

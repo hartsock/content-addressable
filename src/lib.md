@@ -60,7 +60,9 @@ line, where changing them is a major version bump:
   [`ContentId::from_canonical_bytes`] stays the fast, *unchecked* primitive
   with a normative "MUST pass canonical dag-cbor" precondition; the opt-in
   [`ContentId::from_canonical_bytes_checked`] re-encode-validates foreign
-  bytes and errors with [`ContentError::NonCanonical`].
+  bytes and errors with [`ContentError::NonCanonical`]. `0.1.2` extends the
+  same pairing to *decoding* — see [Decoding foreign
+  bytes](#decoding-foreign-bytes).
 - **Error-variant stability** (gate #7): [`ContentError`] is frozen
   `#[non_exhaustive]` with boxed codec sources and a sourced `InvalidCid`;
   see the [`error`] module docs for the operation→variant map.
@@ -76,6 +78,57 @@ re-export surface** and the **MSRV/edition policy** (gate items #9/#10 — see
 the [public API surface](#public-api-surface-frozen-at-010) section below).
 The frozen bytes are pinned by `tests/vectors.json` and the in-crate golden
 tests.
+
+# Decoding foreign bytes
+
+Encoding is safe by construction. **Decoding is not**, and the crate's own
+doctrine — decode-then-trust is sound only when the round trip is proven —
+applies here first. A plain `serde` decode gives back a value that may
+re-encode to *different* bytes, and therefore carry a **different**
+[`ContentId`] than the bytes it came from, with nothing said. Two independent
+ways for that to happen:
+
+- **The bytes were not canonical.** Reordered map keys, non-minimal integers,
+  indefinite lengths: all valid CBOR, none canonical. Decoder strictness has
+  also drifted between codec releases, so the decoder is not the guarantee.
+- **The type dropped what it does not name.** `serde` ignores unknown map keys
+  by default, so a record carrying a field your type has no place for decodes
+  cleanly *with the field gone*. For a protocol record, that may have been a
+  required demand.
+
+The second is invisible to [`ContentId::from_canonical_bytes_checked`], which
+re-encodes as generic `Ipld` and so keeps every key. Only a **typed** round
+trip sees it. Pick the door by what you hold:
+
+| You have | Use | What it establishes |
+|----------|-----|---------------------|
+| bytes + a [`ContentAddressable`] type | [`ContentAddressable::from_canonical_form`] | the bytes are canonical, and `value.canonical_form()?` reproduces them exactly |
+| bytes + any `Serialize + Deserialize` type | [`canonical::from_canonical_dagcbor_checked`] | the same, with `to_canonical_dagcbor(&value)?` in place of `canonical_form` |
+| bytes, and you want only their *id* | [`ContentId::from_canonical_bytes_checked`] | the bytes are canonical (no type is involved) |
+
+Both checked doors are **checked ingress** and *partial* inverses, not universal
+ones: each succeeds on exactly the bytes that are canonical dag-cbor, decodable
+as the target type, and reproduced byte-for-byte by that type's canonical form —
+and each names the prerequisite that failed. The enforced invariant is byte
+equality; the familiar `value.content_id()? == ContentId::from_canonical_bytes(b)`
+equation is a **corollary that holds for a lawful implementation only**, because
+[`ContentAddressable::content_id`] is overridable and this crate cannot check an
+override. Use [`ContentAddressable::ensure_content_id`] when you need that
+equation held rather than assumed.
+
+The contract is stated in full, once, at
+[`ContentAddressable::from_canonical_form`]. It is the place to read about
+lawfulness, and about the lawful types whose canonical form is deliberately not
+their serde representation — those are checked ingress's honest limit, not a
+defect.
+
+`canonical::from_canonical_dagcbor` is **deprecated** as of `0.1.2` (issue
+#90): it verifies neither canonicality nor the round trip, and its name says
+otherwise. Behavior is unchanged for `0.1.x`.
+
+A failed check names the party at fault:
+[`ContentError::NonCanonical`] blames the bytes, [`ContentError::LossyDecode`]
+blames the bytes/type pairing.
 
 # Public API surface (FROZEN at 0.1.0)
 
@@ -128,8 +181,21 @@ smaller surface. `BLAKE3_DIGEST_LEN` stays private. The newer public items
 ([`ContentId::from_canonical_bytes_checked`], [`ContentId::digest_bytes`],
 [`ContentId::digest_hex`], [`ContentId::from_dag_cbor_digest`] (and its
 deprecated predecessor `from_blake3_content_digest`),
-[`ContentAddressable::ensure_content_id`]) are intentional and individually
-documented at their definitions.
+[`ContentAddressable::ensure_content_id`], and — added in `0.1.2` —
+[`canonical::from_canonical_dagcbor_checked`] and
+[`ContentAddressable::from_canonical_form`]) are intentional and individually
+documented at their definitions. Adding to this surface is allowed under the
+freeze; removing or narrowing it is not.
+
+**One `0.1.2` exception, recorded.** The defaulted
+[`ContentAddressable::from_canonical_form`] is not covered by "adding is always
+safe": a defaulted associated function on a public trait can cause `error[E0034]`
+for a downstream type that also receives a `from_canonical_form` from another
+trait in scope (disambiguate with `<T as OtherTrait>::from_canonical_form(b)`).
+That is the single deliberate stability exception in `0.1.2`; no wire bytes, CID
+profile, canonical encoding, identifier, existing signature or existing behavior
+changed, and the rest of the `0.1.x` contract stays in force. See
+`docs/STABILITY.md`.
 
 # MSRV / edition policy (FROZEN at 0.1.0)
 

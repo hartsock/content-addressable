@@ -184,7 +184,7 @@ impl ContentId {
     ///
     /// # Naming (FROZEN at 0.1.0)
     ///
-    /// This door keeps the name `from_canonical_bytes` (the fast primitive) and
+    /// This door keeps the name [`from_canonical_bytes`](Self::from_canonical_bytes) (the fast primitive) and
     /// is **not** renamed to `_unchecked`; the checked variant is the explicitly
     /// suffixed [`from_canonical_bytes_checked`](Self::from_canonical_bytes_checked).
     /// This pairing is a frozen `0.1.0` decision (README gate item #6) — it
@@ -233,14 +233,11 @@ impl ContentId {
     /// - [`ContentError::EncodingError`] in the unlikely event the decoded value
     ///   cannot be re-encoded.
     pub fn from_canonical_bytes_checked(bytes: &[u8]) -> Result<Self, ContentError> {
-        // 1. Decode to the generic Ipld value. Non-dag-cbor garbage fails here.
-        let value: ipld_core::ipld::Ipld = crate::canonical::from_canonical_dagcbor(bytes)?;
-        // 2. Re-encode canonically. The codec emits the *unique* canonical form.
-        let reencoded = crate::canonical::to_canonical_dagcbor(&value)?;
-        // 3. The input was canonical iff it equals its own canonical re-encoding.
-        if reencoded != bytes {
-            return Err(ContentError::NonCanonical);
-        }
+        // Decode to the generic Ipld value, re-encode canonically, require byte
+        // equality. That gate lives in ONE place (issue #90) so this door and
+        // `canonical::from_canonical_dagcbor_checked` cannot drift apart in what
+        // they call canonical; the behavior here is unchanged.
+        crate::canonical::ensure_canonical(bytes)?;
         // The bytes are proven canonical: minting over them is identical to the
         // unchecked primitive, so reuse it (no second decode/encode).
         Ok(Self::from_canonical_bytes(bytes))
@@ -295,7 +292,7 @@ impl ContentId {
     /// *is* a raw 32-byte BLAKE3 digest of the content, so it becomes a kyln
     /// `ContentId` by wrapping it — minus the `blake3::hash` step, because lore
     /// already hashed the content. That bridge is what makes a projected git
-    /// commit's provenance note `content_id` *equal* the originating lore
+    /// commit's provenance note [`content_id`](crate::ContentAddressable::content_id) *equal* the originating lore
     /// revision signature. kyln's adoption (kyln #303) and any other
     /// BLAKE3-native source needs this primitive so a system that already
     /// hashed with BLAKE3 gets an *exact* `ContentId` with no re-hash.
@@ -382,7 +379,7 @@ impl ContentId {
     /// [CID-parameters contract](ContentId#cid-parameters-frozen-at-010)), so
     /// this accessor is infallible and returns a fixed-size array. The copy
     /// (`try_into`) can never fail; the `expect` is unreachable for *any*
-    /// `ContentId` — every ingress path (`from_bytes`, `FromStr`, `TryFrom<Cid>`,
+    /// `ContentId` — every ingress path ([`from_bytes`](Self::from_bytes), `FromStr`, `TryFrom<Cid>`,
     /// binary `Deserialize`) validates the profile, so an off-profile CID can never
     /// become a `ContentId` and reach this method.
     ///
@@ -611,7 +608,7 @@ impl<'de> Deserialize<'de> for ContentId {
 #[cfg(test)]
 mod cid_param_lock_tests {
     //! Locks the frozen v1 CID parameters (issue #4) so they cannot drift
-    //! silently. These assertions live in the `content_id` module itself, next
+    //! silently. These assertions live in the [`content_id`](crate::ContentAddressable::content_id) module itself, next
     //! to the definitions, so the freeze is self-evident at the source. They use
     //! **literal** values (`0x71`, `0x1e`, `V1`, `32`), not the crate constants,
     //! so an accidental edit to a `const` is caught by a failing test rather
@@ -687,11 +684,11 @@ mod no_rehash_digest_tests {
     //! guarded, no-rehash escape hatch that wraps an already-computed BLAKE3
     //! content digest as a `ContentId` **without hashing it again**. These pin
     //! both the produced CID shape and — critically — the *no-rehash invariant*
-    //! that distinguishes this door from `from_canonical_bytes` (which hashes).
+    //! that distinguishes this door from [`from_canonical_bytes`](Self::from_canonical_bytes) (which hashes).
 
     use super::{ContentId, BLAKE3_DIGEST_LEN};
 
-    /// #84: `from_dag_cbor_digest` is the explicitly-named successor and emits
+    /// #84: [`from_dag_cbor_digest`](Self::from_dag_cbor_digest) is the explicitly-named successor and emits
     /// exactly the bytes the deprecated door emits (one shared construction
     /// point), so migrating callers changes no ids.
     #[test]
@@ -818,7 +815,7 @@ mod presentation_tests {
     //! separately-frozen string/byte forms a `ContentId` emits. These pin the
     //! exact values for fixed inputs so any drift in the inner CID's rendering,
     //! the multihash digest, or the hex encoder fails loudly. The cross-language
-    //! `tests/vectors.json` gate additionally pins `digest_hex` (and the base32
+    //! `tests/vectors.json` gate additionally pins [`digest_hex`](Self::digest_hex) (and the base32
     //! string + CID bytes) so Python parity is enforced too; these in-crate
     //! tests assert the *accessor semantics* that the vectors cannot (the array
     //! return, the no-prefix rule, the Display/FromStr round-trip).
@@ -923,7 +920,7 @@ mod presentation_tests {
 #[cfg(test)]
 mod checked_input_tests {
     //! Tests for [`ContentId::from_canonical_bytes_checked`] (issue #5): the
-    //! opt-in, round-trip-validating sibling of the fast `from_canonical_bytes`
+    //! opt-in, round-trip-validating sibling of the fast [`from_canonical_bytes`](Self::from_canonical_bytes)
     //! primitive. They pin the four behaviors the issue's AC names: (a) canonical
     //! bytes accepted and yielding the *same* id as the unchecked door, (b)
     //! non-canonical-but-valid CBOR rejected, (c) non-dag-cbor garbage rejected,
@@ -997,7 +994,11 @@ mod checked_input_tests {
         let non_canonical = [0xa2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02];
 
         // Sanity: it IS valid CBOR (decodes fine), so this exercises the
-        // re-encode-compare path, not the decode path.
+        // re-encode-compare path, not the decode path. The UNVERIFIED door is the
+        // point of the probe — it is what shows the refusal below belongs to the
+        // check and not to the codec — so its deprecation (issue #90) is allowed
+        // here rather than routed around.
+        #[allow(deprecated)]
         let decoded: ipld_core::ipld::Ipld =
             crate::canonical::from_canonical_dagcbor(&non_canonical)
                 .expect("non-canonical bytes are still valid CBOR and decode");
@@ -1074,6 +1075,8 @@ mod checked_input_tests {
 
         // The misleading id differs from the id of the *canonical* form of the
         // same value — the silent integrity hole the precondition warns about.
+        // Same probe, same reason: the unverified door is the subject here.
+        #[allow(deprecated)]
         let decoded: ipld_core::ipld::Ipld =
             crate::canonical::from_canonical_dagcbor(&non_canonical).expect("valid CBOR");
         let canonical = to_canonical_dagcbor(&decoded).expect("re-encode");
@@ -1088,7 +1091,7 @@ mod checked_input_tests {
 
 #[cfg(test)]
 mod profile_validation_tests {
-    //! Every ingress path (`from_bytes`, `FromStr`, `TryFrom<Cid>`, binary
+    //! Every ingress path ([`from_bytes`](Self::from_bytes), `FromStr`, `TryFrom<Cid>`, binary
     //! `Deserialize`) admits ONLY the frozen profile — CIDv1 + dag-cbor (`0x71`) +
     //! BLAKE3 (`0x1e`) + 32-byte digest. A foreign CID is rejected with
     //! [`ContentError::InvalidCidProfile`] rather than smuggled in to panic later in
