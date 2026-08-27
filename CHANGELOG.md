@@ -69,8 +69,11 @@ which keeps every key. Only a **typed** round trip sees it.
   cannot enforce the corollary; use `ensure_content_id` when it must be held
   rather than assumed. The returned value has the same canonical representation
   and identity as the input bytes, but is not necessarily *equal* to a previously
-  encoded in-memory value — a `#[serde(skip)]` or defaulted field decodes to a
-  different value with identical canonical bytes.
+  encoded in-memory value — a `#[serde(skip)]` field is absent from the encoding,
+  so two values differing only in it share identical canonical bytes and the
+  decode returns the default. (A plain `#[serde(default)]` field is not such a
+  case: it is written back on re-encode, so it produces a `LossyDecode` mismatch
+  unless it is also omitted when serializing.)
 
   This is the one addition covered by the *Stability exception* below.
 - **`ContentError::LossyDecode`** — added under the enum's `#[non_exhaustive]`

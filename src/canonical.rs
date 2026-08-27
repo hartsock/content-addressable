@@ -240,11 +240,13 @@ pub(crate) fn ensure_canonical(bytes: &[u8]) -> Result<(), ContentError> {
 /// 2. **Typed decode** — the bytes decode as a `T`. Blames the **bytes/type
 ///    pair** ([`ContentError::DecodingError`]).
 /// 3. **Forward re-encode** — [`to_canonical_dagcbor`] on the decoded value
-///    reproduces the input byte-for-byte. Blames the **type**
+///    reproduces the input byte-for-byte. Rejects the **bytes/type pairing**
 ///    ([`ContentError::LossyDecode`]): the decode succeeded, but the value it
-///    produced is not one these bytes are the canonical encoding of. A dropped
-///    unknown field is the usual cause; a `#[serde(default)]`, an alias, or any
-///    other divergence between `T`'s two serde directions does the same.
+///    produced is not one these bytes are the canonical encoding of. That does
+///    not by itself prove the type is defective, or that anything was lost.
+///    A dropped unknown field is the usual cause; a `#[serde(default)]`, an
+///    alias, or any other divergence between `T`'s two serde directions does
+///    the same.
 ///
 /// Stage 3 is the one no generic check can perform:
 /// [`ContentId::from_canonical_bytes_checked`](crate::ContentId::from_canonical_bytes_checked)

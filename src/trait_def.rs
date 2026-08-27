@@ -214,10 +214,18 @@ pub trait ContentAddressable {
     /// guarantees a value-preserving serde round trip.
     ///
     /// `Serialize + DeserializeOwned` does not establish that. A
-    /// `#[serde(skip)]` or defaulted field decodes to a *different* in-memory
-    /// value with **identical** canonical bytes — which this door correctly
-    /// accepts, because those bytes really are that value's canonical
-    /// representation. Identity is preserved; the in-memory value need not be.
+    /// `#[serde(skip)]` field is the clean counterexample: it is absent from the
+    /// encoding entirely, so two values differing only in it share **identical**
+    /// canonical bytes, and decoding returns the default rather than what was
+    /// encoded. This door correctly accepts that — those bytes really are that
+    /// value's canonical representation. Identity is preserved; the in-memory
+    /// value need not be.
+    ///
+    /// A plain `#[serde(default)]` field is **not** such a case. It only supplies
+    /// a value when one is missing on the way in; ordinary derived serialization
+    /// writes it back out, so the re-encoding differs from the input and stage 3
+    /// reports [`ContentError::LossyDecode`]. It joins `#[serde(skip)]` here only
+    /// if it is *also* omitted when serializing.
     ///
     /// A second, separate limit applies to the *shape* of the type:
     ///
