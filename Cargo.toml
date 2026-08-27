@@ -15,7 +15,7 @@ default-members = ["."]
 
 [package]
 name = "content-addressable"
-version = "0.1.1"
+version = "0.1.2"
 # FROZEN policy (gate item #10, issue #9): the edition stays at 2021 and the
 # MSRV floor is `1.85` for the `0.1.x` line. 1.85 is the Rust 2024 edition
 # baseline, required transitively because blake3 >= 1.6 pulls cpufeatures 0.3
