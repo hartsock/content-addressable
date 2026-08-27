@@ -205,12 +205,21 @@ pub trait ContentAddressable {
     ///
     /// Every failure names the prerequisite that was not met.
     ///
-    /// # Inverse on its domain, not universally
+    /// # What "inverse" does and does not mean here
     ///
-    /// For a type whose [`canonical_form`](Self::canonical_form) **is** its ordinary serde encoding — the
-    /// recommended one-liner — this is a left inverse of [`canonical_form`](Self::canonical_form):
-    /// round-tripping any value returns it. That is not true of every lawful
-    /// implementation, and the difference is worth stating plainly.
+    /// On its accepted byte domain, decoding and re-encoding reproduces the
+    /// original canonical bytes. The returned value therefore has the same
+    /// canonical representation and content identity; it is **not necessarily
+    /// equal to a previously encoded in-memory value** unless the type separately
+    /// guarantees a value-preserving serde round trip.
+    ///
+    /// `Serialize + DeserializeOwned` does not establish that. A
+    /// `#[serde(skip)]` or defaulted field decodes to a *different* in-memory
+    /// value with **identical** canonical bytes — which this door correctly
+    /// accepts, because those bytes really are that value's canonical
+    /// representation. Identity is preserved; the in-memory value need not be.
+    ///
+    /// A second, separate limit applies to the *shape* of the type:
     ///
     /// A type may define a [`canonical_form`](Self::canonical_form) that is deliberately **not** its
     /// serde representation — an envelope, a versioned framing, a projection —
@@ -290,8 +299,9 @@ pub trait ContentAddressable {
 pub(crate) enum CheckedDecode<T> {
     /// The bytes decoded as a `T` whose [`canonical_form`](crate::ContentAddressable::canonical_form) reproduces them exactly.
     Value(T),
-    /// The decode succeeded but lost information: the decoded value's
-    /// [`canonical_form`](crate::ContentAddressable::canonical_form) differs from the input bytes.
+    /// Typed round-trip mismatch: the decode succeeded, but the decoded value's
+    /// [`canonical_form`](crate::ContentAddressable::canonical_form) differs from
+    /// the input bytes, so those bytes are not its canonical representation.
     Lossy,
 }
 

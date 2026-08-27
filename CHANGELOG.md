@@ -44,15 +44,33 @@ which keeps every key. Only a **typed** round trip sees it.
   — decode, then prove the round trip. Three stages, each naming a different
   party: the bytes are canonical (`NonCanonical` blames the **bytes**), they
   decode as a `T` (`DecodingError`), and re-encoding the value reproduces them
-  byte-for-byte (`LossyDecode` blames the **type**). Exact byte equality is
-  stronger than comparing the two ids — it assumes no collision resistance.
+  byte-for-byte (`LossyDecode` blames the bytes/type **pairing** — these bytes
+  are not that type's canonical representation of what it decoded). Exact byte
+  equality is stronger than comparing the two ids — it assumes no collision
+  resistance.
 - **`ContentAddressable::from_canonical_form`** — the same guarantee as a
   defaulted trait method, so the ergonomic path is the safe one. It re-encodes
   through the type's own `canonical_form` (the function that *defines* its
   identity), not through `to_canonical_dagcbor`, which is why its bound is
   `DeserializeOwned + Sized` and not also `Serialize`. It carries
-  `where Self: Sized`, so the trait stays dyn-compatible. The guarantee, stated:
-  `T::from_canonical_form(b)?.content_id()? == ContentId::from_canonical_bytes(b)`.
+  `where Self: Sized`, so the trait stays dyn-compatible.
+
+  The enforced guarantee is **byte equality**, and the method never calls
+  `content_id`:
+
+  ```rust
+  let value = T::from_canonical_form(b)?;
+  assert_eq!(value.canonical_form()?, b);
+  ```
+
+  `value.content_id()? == ContentId::from_canonical_bytes(b)` follows only as a
+  **corollary for a lawful implementation** — one whose `content_id()` obeys the
+  trait law. `content_id` is overridable and nothing here calls it, so the crate
+  cannot enforce the corollary; use `ensure_content_id` when it must be held
+  rather than assumed. The returned value has the same canonical representation
+  and identity as the input bytes, but is not necessarily *equal* to a previously
+  encoded in-memory value — a `#[serde(skip)]` or defaulted field decodes to a
+  different value with identical canonical bytes.
 
   This is the one addition covered by the *Stability exception* below.
 - **`ContentError::LossyDecode`** — added under the enum's `#[non_exhaustive]`
@@ -96,7 +114,7 @@ license further ones. See `docs/STABILITY.md`.
 ### Deprecated
 
 - **`canonical::from_canonical_dagcbor`** — it verifies neither canonical form
-  nor a lossless typed decode, and its name says otherwise. Behavior is
+  nor the typed round trip, and its name says otherwise. Behavior is
   **unchanged** for `0.1.x`; removal is a major-version event. Successors:
   `from_canonical_dagcbor_checked`, or `ContentAddressable::from_canonical_form`
   when the type is `ContentAddressable`. Deprecation rather than a silent fix so

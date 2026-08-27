@@ -210,12 +210,15 @@ generic IPLD and therefore keeps every key — only a **typed** round trip sees 
 | Use case | API (Rust / Python) | Contract |
 |----------|---------------------|----------|
 | Decode foreign bytes into a `ContentAddressable` type | `T::from_canonical_form(b)` / — | Canonical bytes **and** `canonical_form` reproduces them: the value is provably the one `b` names |
-| Decode foreign bytes into any `Serialize + Deserialize` type | `canonical::from_canonical_dagcbor_checked::<T>(b)` / `from_canonical_dagcbor_checked(b)` | Canonical bytes **and** a lossless serde round trip |
+| Decode foreign bytes into any `Serialize + Deserialize` type | `canonical::from_canonical_dagcbor_checked::<T>(b)` / `from_canonical_dagcbor_checked(b)` | Canonical bytes **and** `to_canonical_dagcbor` on the decoded value reproduces them |
 | Decode bytes you just encoded yourself | `canonical::from_canonical_dagcbor(b)` / `from_canonical_dagcbor(b)` | **Deprecated (Rust, 0.1.2)** — verifies neither of the above |
 
 A failed check names the party at fault: `ContentError::NonCanonical` blames the
-bytes, `ContentError::LossyDecode` blames the type. In Python only the first is
-reachable — decoding into `dict`/`list` keeps every key, so no field can be
+bytes, `ContentError::LossyDecode` blames the bytes/type *pairing* — these bytes
+are not that type's canonical representation of what it decoded. A dropped
+unknown field is the motivating case; a type whose canonical form intentionally
+differs from its serde representation reaches the same verdict without losing
+anything. In Python only the first is reachable — decoding into `dict`/`list` keeps every key, so no field can be
 dropped ([#90]).
 
 > **Python, tag-42 links.** The Python codec is asymmetric about links and has

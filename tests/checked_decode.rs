@@ -60,8 +60,8 @@ fn checked_refuses_a_typed_decode_that_drops_a_field() {
         .expect_err("a decode that drops `zeta` must be refused");
     assert!(
         matches!(err, ContentError::LossyDecode),
-        "a lossy typed decode must be LossyDecode (the TYPE is to blame, not the \
-         bytes — they are canonical), got {err:?}"
+        "a typed round-trip mismatch must be LossyDecode (the bytes are canonical, \
+         so the mismatch is with the TYPE's representation of them), got {err:?}"
     );
 }
 
@@ -227,15 +227,80 @@ fn from_canonical_form_refuses_non_canonical_bytes() {
 
 #[test]
 fn from_canonical_form_returns_a_value_named_by_the_bytes() {
-    // The guarantee, stated as an equation: what comes back re-derives the very
-    // identity the bytes have. That is the whole point of the door.
+    // The ENFORCED guarantee is byte equality — that is what the implementation
+    // actually checks, and it never calls content_id.
     let bytes = canonical::to_canonical_dagcbor(&Node { alpha: 7 }).expect("encode");
     let node = Node::from_canonical_form(&bytes).expect("a faithful round trip is accepted");
     assert_eq!(node, Node { alpha: 7 });
     assert_eq!(
+        node.canonical_form().expect("canonical_form"),
+        bytes,
+        "the enforced invariant: the decoded value re-encodes to exactly the input"
+    );
+
+    // Identity equality is a COROLLARY, and only for a lawful implementation —
+    // one whose content_id() obeys the trait law, as `Node`'s default does.
+    // content_id is overridable and the door never calls it, so an unlawful
+    // override would break this while the invariant above still held.
+    assert_eq!(
         node.content_id().expect("content_id"),
         content_addressable::ContentId::from_canonical_bytes(&bytes),
-        "from_canonical_form(b) must return the value that b NAMES"
+        "for a lawful impl, byte equality gives identity equality"
+    );
+}
+
+/// A type whose skipped field is not part of its canonical representation. Two
+/// values, one canonical form, one id.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Skipped {
+    alpha: u64,
+    #[serde(skip)]
+    hidden: u64,
+}
+
+impl ContentAddressable for Skipped {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(self)
+    }
+}
+
+#[test]
+fn the_decoded_value_need_not_equal_the_encoded_one() {
+    // `Serialize + DeserializeOwned` does NOT establish decode(encode(v)) == v,
+    // so the door cannot promise it and does not. `hidden` is not part of the
+    // canonical representation: two distinct values encode to the same bytes and
+    // share one identity, and the decode returns the default rather than the
+    // value that was encoded.
+    let encoded = Skipped {
+        alpha: 7,
+        hidden: 99,
+    };
+    let bytes = encoded.canonical_form().expect("canonical_form");
+
+    let decoded = Skipped::from_canonical_form(&bytes).expect("accepted — correctly");
+    assert_ne!(
+        decoded, encoded,
+        "the in-memory value is NOT recovered — that is the claim the docs must not make"
+    );
+    assert_eq!(
+        decoded,
+        Skipped {
+            alpha: 7,
+            hidden: 0
+        }
+    );
+
+    // ...and accepting it is right, because the enforced invariant still holds:
+    // these bytes ARE the canonical representation of what came back.
+    assert_eq!(
+        decoded.canonical_form().expect("canonical_form"),
+        bytes,
+        "byte equality holds even though the value differs"
+    );
+    assert_eq!(
+        decoded.content_id().expect("content_id"),
+        encoded.content_id().expect("content_id"),
+        "one canonical form, one identity — the skipped field is outside it"
     );
 }
 

@@ -160,7 +160,7 @@ pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentE
 /// [`from_canonical_dagcbor_checked`] for either guarantee.
 #[deprecated(
     since = "0.1.2",
-    note = "does not verify canonical form or a lossless typed decode, so the value it \
+    note = "does not verify canonical form or the typed round trip, so the value it \
 returns can carry a different ContentId than the bytes it came from; use \
 from_canonical_dagcbor_checked (or ContentAddressable::from_canonical_form)"
 )]
@@ -298,8 +298,10 @@ pub(crate) fn ensure_canonical(bytes: &[u8]) -> Result<(), ContentError> {
 ///   decode as a `T`.
 /// - [`ContentError::NonCanonical`] — the bytes are valid CBOR but not the
 ///   canonical encoding.
-/// - [`ContentError::LossyDecode`] — the typed decode dropped information:
-///   re-encoding the decoded value differs from the input.
+/// - [`ContentError::LossyDecode`] — typed round-trip mismatch: re-encoding the
+///   decoded value differs from the input, so these bytes are not its canonical
+///   representation. A dropped unknown field is the motivating case and the one
+///   with security consequences, but not the only way to get here.
 /// - [`ContentError::EncodingError`] — a re-encode failed.
 pub fn from_canonical_dagcbor_checked<T: DeserializeOwned + Serialize>(
     bytes: &[u8],

@@ -180,7 +180,10 @@ pub enum ContentError {
     /// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form),
     /// which re-encodes with the type's own
     /// [`canonical_form`](crate::ContentAddressable::canonical_form). Those two
-    /// are its only producers.
+    /// are the only **crate-owned** stage-three construction sites — a user's own
+    /// [`canonical_form`](crate::ContentAddressable::canonical_form) may of course
+    /// return this public variant, and when it does the crate propagates it
+    /// verbatim rather than reinterpreting it (see below).
     ///
     /// The bytes were already proven canonical by the time this can fire, so they
     /// are *not* at fault: the mismatch is between the input and **the target
@@ -215,9 +218,7 @@ pub enum ContentError {
     ///
     /// Added in `0.1.2` (issue #90) under the enum's `#[non_exhaustive]`
     /// contract.
-    #[error(
-        "the typed decode dropped information: re-encoding the decoded value differs from the input"
-    )]
+    #[error("typed round-trip mismatch: re-encoding the decoded value differs from the input")]
     LossyDecode,
 
     /// A CID could not be parsed from a string or from bytes.
