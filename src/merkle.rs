@@ -90,7 +90,7 @@ use crate::trait_def::ContentAddressable;
 /// `MerkleNode<T>` implements [`ContentAddressable`] with the one-line
 /// [`canonical_form`](ContentAddressable::canonical_form) deferring to
 /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor), so
-/// `content_id` / `verify` come for free and the id is over the *whole* node
+/// [`content_id`](crate::ContentAddressable::content_id) / [`verify`](crate::ContentAddressable::verify) come for free and the id is over the *whole* node
 /// including its parent links.
 ///
 /// # ⚠️ Non-frozen bytes
@@ -219,7 +219,7 @@ mod tests {
 
     /// A stand-in parent id, minted from canonical bytes the same way the rest
     /// of the crate does. The exact bytes don't matter — only that it is a real
-    /// `ContentId` that serializes as a tag-42 link.
+    /// [`ContentId`] that serializes as a tag-42 link.
     fn id_for(payload: &str) -> ContentId {
         MerkleNode::genesis(payload.to_string()).id().unwrap()
     }

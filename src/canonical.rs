@@ -154,8 +154,10 @@ pub fn to_canonical_dagcbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ContentE
 ///
 /// # Errors
 ///
-/// Returns [`ContentError::DecodingError`] if the bytes are not valid canonical
-/// dag-cbor for the target type.
+/// Returns [`ContentError::DecodingError`] when the bytes cannot be decoded as
+/// dag-cbor for the target type. It does not establish that the input was
+/// canonical, or that the typed round trip preserves the original bytes — use
+/// [`from_canonical_dagcbor_checked`] for either guarantee.
 #[deprecated(
     since = "0.1.2",
     note = "does not verify canonical form or a lossless typed decode, so the value it \

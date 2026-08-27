@@ -1,4 +1,4 @@
-//! The CID-addressed node store seam — `get`/`put` by [`ContentId`], with a
+//! The CID-addressed node store seam — [`get`](NodeStoreExt::get)/[`put`](NodeStoreExt::put) by [`ContentId`], with a
 //! verified read path the extension-trait implementation establishes.
 //!
 //! # Why this exists
@@ -45,14 +45,14 @@
 //!   returns [`ContentId::from_canonical_bytes`]`(b)`). This is **sealed**: the id
 //!   is derived in the blanket-implemented extension, and the backend's only write
 //!   op ([`insert`](NodeStore::insert)) receives an unforgeable [`AddressedBytes`]
-//!   whose id it *cannot* have chosen — so a backend cannot influence the id `put`
+//!   whose id it *cannot* have chosen — so a backend cannot influence the id [`put`](NodeStoreExt::put)
 //!   returns, nor be handed bytes that do not derive their key. Addressing is a pure
 //!   function of content. The corollary `put_node(n) == n.content_id()` holds
 //!   **only for a lawful [`ContentAddressable`]** — one whose (overridable)
-//!   `content_id` honors `content_id() == Address(canonical_form())`; the seam
-//!   cannot prove it for an arbitrary impl and does not rely on it (`put_node` uses
+//!   [`content_id`](crate::ContentAddressable::content_id) honors `content_id() == Address(canonical_form())`; the seam
+//!   cannot prove it for an arbitrary impl and does not rely on it ([`put_node`](NodeStoreExt::put_node) uses
 //!   the strict [`put_checked`](NodeStoreExt::put_checked), so a non-canonical
-//!   `canonical_form` is a write-time error, not a mis-stamped id). (What a backend
+//!   [`canonical_form`](crate::ContentAddressable::canonical_form) is a write-time error, not a mis-stamped id). (What a backend
 //!   does *with* a well-formed pair — file it correctly, durably, without disturbing
 //!   another entry — is PO-STORE-1B, not this law.)
 //! - **PO-STORE-1B (backend acknowledgement) \[proof target: TLA+, a backend law, deferred\]** — that
@@ -66,13 +66,13 @@
 //!   disk/network backend discharges it per its own model, surfacing failures
 //!   through [`StoreError::Backend`].
 //! - **PO-STORE-2 (verify-on-read soundness) \[proof target: Lean, deferred\]** — for **any** backend
-//!   `get_unverified`, including an adversarial one,
+//!   [`get_unverified`](NodeStore::get_unverified), including an adversarial one,
 //!   [`NodeStoreExt::get`]`(id)` returns `Ok(b)` only if
 //!   `from_canonical_bytes(b) == id` (byte-addressed: `b` hashes to `id`; it does
 //!   *not* assert `b` is canonical — see [`get`](NodeStoreExt::get) and the
 //!   identity-preserving [`get_node`](NodeStoreExt::get_node)). Corruption or
 //!   substitution surfaces as [`ContentError::VerificationFailed`], never as wrong
-//!   bytes. This holds for arbitrary backends because `get` is blanket-implemented
+//!   bytes. This holds for arbitrary backends because [`get`](NodeStoreExt::get) is blanket-implemented
 //!   and sealed by coherence.
 //! - **PO-STORE-3 (grow-only monotonicity, fail-closed) \[proof target: TLA+, a backend law, deferred\]** —
 //!   a *conforming* backend's `id → bytes` map only grows and a mapping is never
@@ -104,7 +104,7 @@
 //! change ceremony until the catalog stabilizes (epic #30's release ladder).
 //! The seam defines **no new wire bytes of its own** — it stores bytes whose
 //! layout is owned elsewhere (canonical dag-cbor when written through the typed
-//! `put_node` / `put_checked` doors; the raw `put` is unchecked) — so nothing here is added to
+//! [`put_node`](NodeStoreExt::put_node) / [`put_checked`](NodeStoreExt::put_checked) doors; the raw [`put`](NodeStoreExt::put) is unchecked) — so nothing here is added to
 //! `tests/vectors.json` (the frozen cross-language parity gate deliberately
 //! excludes experimental surfaces).
 //!
@@ -551,14 +551,14 @@ pub trait NodeStoreExt: NodeStore {
     ///
     /// Because [`ContentAddressable`] only requires *determinism* (equal values ⇒
     /// equal bytes), not canonical dag-cbor, this routes through
-    /// [`put_checked`](Self::put_checked): a `canonical_form` that returns
+    /// [`put_checked`](Self::put_checked): a [`canonical_form`](crate::ContentAddressable::canonical_form) that returns
     /// non-canonical CBOR (or non-CBOR) is a **write-time error** here, not a
     /// DAG-CBOR-stamped id naming bytes that are not DAG-CBOR. So the seam does not
     /// trust a trait law it cannot enforce.
     ///
     /// The returned id is `Address(node.canonical_form())` (the seam theorem, PO-STORE-1A).
     /// It equals `node.content_id()` **only for a lawful implementation** — one whose
-    /// (overridable) `content_id` honors `content_id() == Address(canonical_form())`.
+    /// (overridable) [`content_id`](crate::ContentAddressable::content_id) honors `content_id() == Address(canonical_form())`.
     ///
     /// # Errors
     ///

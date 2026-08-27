@@ -173,14 +173,18 @@ pub enum ContentError {
     /// A **typed round-trip mismatch**: the value decoded, but re-encoding it
     /// does not reproduce the input bytes.
     ///
-    /// Returned at the third stage of both checked doors —
-    /// [`from_canonical_dagcbor_checked`](crate::canonical::from_canonical_dagcbor_checked)
-    /// (re-encoding with
-    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor)) and
-    /// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form)
-    /// (re-encoding with the type's own [`canonical_form`](crate::ContentAddressable::canonical_form)). The bytes were already
-    /// proven canonical, so they are *not* at fault: the mismatch is between the
-    /// input and **the target type's canonical representation of what it decoded**.
+    /// Produced at the third stage of the two checked doors —
+    /// [`canonical::from_canonical_dagcbor_checked`](crate::canonical::from_canonical_dagcbor_checked),
+    /// which re-encodes with
+    /// [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor), and
+    /// [`ContentAddressable::from_canonical_form`](crate::ContentAddressable::from_canonical_form),
+    /// which re-encodes with the type's own
+    /// [`canonical_form`](crate::ContentAddressable::canonical_form). Those two
+    /// are its only producers.
+    ///
+    /// The bytes were already proven canonical by the time this can fire, so they
+    /// are *not* at fault: the mismatch is between the input and **the target
+    /// type's canonical representation of what it decoded**.
     ///
     /// Information loss is the usual cause and the one that motivated the
     /// variant: `serde` ignores unknown map keys by default, so a record carrying
@@ -238,7 +242,7 @@ pub enum ContentError {
     /// Every ingress path — [`from_bytes`](crate::ContentId::from_bytes), the
     /// [`FromStr`](core::str::FromStr) impl, [`TryFrom<Cid>`](crate::ContentId), and
     /// the binary/IPLD `Deserialize` — rejects a foreign CID with this, so *every*
-    /// `ContentId` (however it entered) carries the fixed profile the presentation
+    /// [`ContentId`](crate::ContentId) (however it entered) carries the fixed profile the presentation
     /// accessors ([`digest_bytes`](crate::ContentId::digest_bytes) etc.) rely on.
     /// A policy rejection, so — like [`NonCanonical`](ContentError::NonCanonical) —
     /// it carries no underlying `source`; `reason` names the parameter that was off.

@@ -37,7 +37,7 @@
 //! [`to_bytes`](RawContentId::to_bytes)/[`from_bytes`](RawContentId::from_bytes)
 //! are the CID binary envelope, [`digest_bytes`](RawContentId::digest_bytes)/
 //! [`digest_hex`](RawContentId::digest_hex) are the bare 32-byte digest. The
-//! serde form is the same as `ContentId`'s: a tag-42 link in binary/IPLD
+//! serde form is the same as [`ContentId`]'s: a tag-42 link in binary/IPLD
 //! formats, the base32-lower string in human-readable ones. Every ingress path
 //! validates the raw profile, so a `RawContentId` (however it entered) always
 //! carries it and every accessor is total.
@@ -83,8 +83,8 @@ impl RawContentId {
     /// whose "MUST be canonical dag-cbor" precondition exists because a
     /// dag-cbor id names a *value*, not the bytes.)
     ///
-    /// Named `from_content` rather than `from_bytes` on purpose: across both
-    /// profiles `from_bytes`/`to_bytes` always mean the **CID binary envelope**
+    /// Named [`from_content`](RawContentId::from_content) rather than [`from_bytes`](RawContentId::from_bytes) on purpose: across both
+    /// profiles [`from_bytes`](RawContentId::from_bytes)/[`to_bytes`](RawContentId::to_bytes) always mean the **CID binary envelope**
     /// (the presentation contract), never "hash these bytes".
     #[must_use]
     pub fn from_content(content: &[u8]) -> Self {

@@ -73,7 +73,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// [`ClassifiedCid`] canonical.
 ///
 /// A `ForeignCid` can be carried, compared, linked and rendered. It cannot be
-/// minted here and never becomes a `ContentId`/`RawContentId` without re-hashing
+/// minted here and never becomes a [`ContentId`]/[`RawContentId`] without re-hashing
 /// the actual content under a profile this crate does mint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ForeignCid(Cid);
