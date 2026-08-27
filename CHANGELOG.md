@@ -15,10 +15,7 @@ Two distributions ship from this one repository and share a version:
 The PyPI **distribution** name is `content-addressable` (hyphen); the **import**
 name is `content_addressable` (underscore).
 
-## Unreleased — the decode side of the contract
-
-Lands as `0.1.2`; the package version is bumped in a separate release PR, as
-`0.1.1` was ([#86]).
+## [0.1.2] — 2026-08-27 — the decode side of the contract
 
 This release closes the hole on the *other* side of the codec — decoding ([#90]).
 Every golden vector is byte-identical and identifiers minted under `0.1.0` /
@@ -174,7 +171,6 @@ license further ones. See `docs/STABILITY.md`.
   identity.
 
 [#90]: https://github.com/hartsock/content-addressable/issues/90
-[#86]: https://github.com/hartsock/content-addressable/pull/86
 
 ## [0.1.1] — the identity/classification layer
 
@@ -323,5 +319,6 @@ release outside `0.1.x`.
 - Non-integer floats are outside the canonical vector set (DAG-CBOR float rules
   are handled per-language, not in the shared cross-language gate).
 
+[0.1.2]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.2
 [0.1.1]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.1
 [0.1.0]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.0
