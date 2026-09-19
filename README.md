@@ -137,9 +137,3 @@ See [RELEASING.md](RELEASING.md) for tag-driven releases.
 ## License
 
 [Apache-2.0](LICENSE).
-
----
-
-Editorial refactor:
-
-Model: not exposed by harness | Harness: Codex | Operator: Shawn Hartsock | Time: 16:56 EDT | Date: 2026-09-19
