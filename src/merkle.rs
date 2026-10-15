@@ -27,13 +27,15 @@
 //!
 //! # Frozen bytes
 //!
-//! A [`MerkleNode`]'s serialized bytes are **frozen**, like [`ContentId`] and
-//! [`canonical`]. The layout is the dag-cbor map `{"parents": [tag-42 links,
-//! sorted by CID bytes, deduplicated], "payload": <payload>}`. It is pinned by
-//! `tests/merkle_vectors.json`, which both the Rust gate
-//! (`tests/merkle_conformance.rs`) and the Python gate rebuild byte for byte.
-//! The field key strings `payload` / `parents` are load-bearing for every id.
-//! Changing any of this is a major version bump.
+//! The **envelope** of a [`MerkleNode`] is frozen: the dag-cbor map
+//! `{"parents": [tag-42 links, sorted by CID bytes, deduplicated], "payload": …}`
+//! and the CID derived from it. Payload bytes are frozen for payloads inside the
+//! crate's canonical data model (`Ipld` and types serializing to it), not for an
+//! arbitrary `T`. The byte-level specification, including which layer rejects
+//! which malformed input, is `docs/MERKLE_WIRE.md`; `tests/merkle_vectors.json`
+//! pins five cases and both language gates rebuild them. The key strings
+//! `payload` / `parents` are load-bearing for every id. Changing the envelope is
+//! a major version bump.
 
 use std::collections::BTreeSet;
 

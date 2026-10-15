@@ -200,13 +200,17 @@ narrowing a frozen export after `0.1.0` is a breaking release outside `0.1.x`; *
 
 ### `MerkleNode` bytes ([#112])
 
-`MerkleNode<T>` is part of the default surface and its serialized bytes are
-frozen: the dag-cbor map `{"parents": [tag-42 links, sorted by CID bytes,
-deduplicated], "payload": T}`. `tests/merkle_vectors.json` pins the exact bytes
-and CID of five cases (no parents, one parent, shuffled parents, duplicate
-parents, nested payload); the Rust gate and the Python gate both rebuild them.
-The `unstable-merkle` feature remains as a deprecated no-op alias. A layout
-change is a breaking release outside `0.1.x`.
+`MerkleNode<T>` is part of the default surface. The **envelope** is frozen: the
+two keys and their order, the parent array encoding and sort rule, the tag-42
+link form and the CID derivation. Payload bytes are frozen for payloads within
+the crate's canonical data model (`Ipld` and types serializing to it), not for
+an arbitrary `T`. The exact bytes, the CID derivation and the decoder/verifier
+split are specified in [MERKLE_WIRE.md](MERKLE_WIRE.md);
+`tests/merkle_vectors.json` pins five cases, and the Rust and Python gates
+rebuild them from that spec. The vector file's digest is pinned and its
+generator refuses to overwrite it without `MERKLE_VECTORS_REGENERATE=1`. The
+`unstable-merkle` feature remains as a deprecated no-op alias. A layout change
+is a breaking release outside `0.1.x`.
 
 ### MSRV & edition ([#9])
 
