@@ -1,10 +1,11 @@
 # HOOK PARITY: the cargo fmt/clippy/test/doc jobs AND the `leaf-deps` job are
 # mirrored by .githooks/pre-push. When editing those, update the push hook to
 # match. The
-# build/test/clippy jobs run with `--all-features` so the default-OFF `unstable-merkle`
-# feature (src/merkle.rs / MerkleNode) is actually compiled and tested; the
-# `test` job additionally runs a plain `cargo test` to keep the default-feature
-# surface green and to prove `unstable-merkle` stays off by default. The `doc` job runs
+# build/test/clippy jobs run with `--all-features` so the default-OFF `unstable-*`
+# features are actually compiled and tested; the `test` job additionally runs a
+# plain `cargo test` for the default, frozen surface (MerkleNode and its
+# tests/merkle_vectors.json parity gate live there; the Python side of that
+# gate runs in the python job's pytest). The `doc` job runs
 # rustdoc with `-D warnings` (`--all-features`) so a broken intra-doc link fails
 # CI — API-surface hygiene (issue #9); it is mirrored in the hook (rustdoc is
 # cheap). The `leaf-deps` job runs scripts/check-leaf-deps.sh, which asserts the
@@ -75,9 +76,9 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: cargo test (default features — proves unstable-merkle stays off)
+      - name: cargo test (default features — the frozen surface, incl. MerkleNode vectors)
         run: cargo test
-      - name: cargo test --all-features (exercises the unstable-merkle feature)
+      - name: cargo test --all-features (exercises the unstable-* features)
         run: cargo test --all-features
 
   msrv:

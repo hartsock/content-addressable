@@ -31,13 +31,14 @@ fmt:
     cargo fmt -- --check
 
 # Lint with all warnings denied. `--all-features` compiles the default-OFF
-# `unstable-merkle` feature so its lints are checked too.
+# `unstable-*` features so their lints are checked too.
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
 # Run all tests (unit + doctests). Plain `cargo test` includes doctests, which
 # `--all-targets` would skip. The `--all-features` pass exercises the default-OFF
-# `unstable-merkle` feature; the plain pass proves it stays off by default.
+# `unstable-*` features; the plain pass proves the default surface (including
+# the frozen `MerkleNode`) builds and passes without them.
 test:
     cargo test
     cargo test --all-features
