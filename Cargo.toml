@@ -69,6 +69,14 @@ unstable-migration = []
 # its bytes are not in tests/vectors.json until conformance vectors land (#33).
 # CI and the pre-push hook exercise it via `--all-features`.
 dir-tree = ["unstable-store"]
+# `multi-digest` lets a `dir_tree` file link COMPUTE the SHA-256 / MD5 digests it
+# carries in `also` (`DigestAlg`, `file_link`, `snapshot_with`; issue #107), so
+# `Proof::verify_file` can check them. Default-OFF: carrying and validating
+# `also` needs no feature, and without it a digest this build cannot compute is
+# a typed `UnsupportedDigest`, never skipped. BLAKE3 stays the only minted
+# identity. NON-FROZEN with `dir-tree`. CI and the pre-push hook exercise it
+# via `--all-features`.
+multi-digest = ["dir-tree", "dep:sha2", "dep:md-5"]
 
 [dependencies]
 # ipld-core re-exports the `cid` crate (as ipld_core::cid) which in turn
@@ -85,6 +93,11 @@ serde_ipld_dagcbor = "0.6"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+# Optional, behind `multi-digest`: the SHA-256 / MD5 verifiers for `dir_tree`
+# `also` digests (issue #107). 0.10.x declares no rust-version and builds on the
+# 1.85 MSRV; `cargo +1.85 test --all-features` is the guard.
+sha2 = { version = "0.10", optional = true }
+md-5 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 # NOTE: `serde` is intentionally NOT repeated here — the `[dependencies]` entry

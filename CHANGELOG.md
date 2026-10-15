@@ -24,6 +24,12 @@ name is `content_addressable` (underscore).
   `ContentId` names a directory of files, and a path resolves to a file's id
   with an O(depth) proof that verifies against only the root. Bytes are
   NON-FROZEN until conformance vectors land (#33).
+- `dir_tree` multi-digest file links behind the new default-off `multi-digest`
+  feature ([#107]): `Link::File` gains `also`, extra SHA-256 / MD5 digests of
+  the same bytes that `Proof::verify_file` checks ALL of, alongside BLAKE3 and
+  size. New `DigestAlg`, `file_link`, `snapshot_with`, and the typed errors
+  `InvalidDigest` / `UnsupportedDigest`. A link with no `also` keeps its
+  previous bytes and root. `Link` is no longer `Copy`.
 
 ## [0.1.2] — 2026-08-27 — the decode side of the contract
 
@@ -182,6 +188,7 @@ license further ones. See `docs/STABILITY.md`.
 
 [#90]: https://github.com/hartsock/content-addressable/issues/90
 [#105]: https://github.com/hartsock/content-addressable/issues/105
+[#107]: https://github.com/hartsock/content-addressable/issues/107
 
 ## [0.1.1] — the identity/classification layer
 
