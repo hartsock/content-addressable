@@ -237,7 +237,11 @@ fixed for `0.1.x`.
 
 `unstable-merkle` is a no-op alias that enables nothing; `MerkleNode` is in the
 default surface and its bytes are frozen (see "`MerkleNode` bytes" above). The
-alias exists only so manifests that list it keep resolving, and may be removed.
+alias exists only so manifests that list it keep resolving. Enabling it changes
+no bytes. Removing it would break those manifests, so it stays for all of 0.1.x
+and may go only in a breaking release (0.2.0), noted in the CHANGELOG. This is a
+promise about the feature name only; the `MerkleNode` API and bytes are frozen
+regardless.
 
 ### The `unstable-store` feature — experimental API
 
