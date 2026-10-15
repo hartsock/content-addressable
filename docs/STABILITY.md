@@ -194,9 +194,19 @@ The public crate-root re-export surface is frozen and minimal: `ContentId`,
 `canonical::to_canonical_dagcbor` etc., not re-exported at the root). The
 codec/hash codes `DAG_CBOR_CODEC` / `BLAKE3_HASH_CODE` are `pub` in `content_id`
 but deliberately **not** promoted to the crate root; `BLAKE3_DIGEST_LEN` is
-private. `MerkleNode` is re-exported only under the experimental `unstable-merkle` feature;
+private. `MerkleNode` is part of the default surface (its bytes are frozen, see below);
 the `store` surface only under the experimental `unstable-store` feature. Removing or
 narrowing a frozen export after `0.1.0` is a breaking release outside `0.1.x`; *adding* one is allowed.
+
+### `MerkleNode` bytes ([#112])
+
+`MerkleNode<T>` is part of the default surface and its serialized bytes are
+frozen: the dag-cbor map `{"parents": [tag-42 links, sorted by CID bytes,
+deduplicated], "payload": T}`. `tests/merkle_vectors.json` pins the exact bytes
+and CID of five cases (no parents, one parent, shuffled parents, duplicate
+parents, nested payload); the Rust gate and the Python gate both rebuild them.
+The `unstable-merkle` feature remains as a deprecated no-op alias. A layout
+change is a breaking release outside `0.1.x`.
 
 ### MSRV & edition ([#9])
 
@@ -219,16 +229,11 @@ fixed for `0.1.x`.
 
 ## What is NOT frozen
 
-### The `unstable-merkle` feature — experimental node bytes
+### The `unstable-merkle` feature — deprecated alias
 
-The default-off `unstable-merkle` feature ships `MerkleNode<T>` (a `payload: T` plus
-`parents: BTreeSet<ContentId>`, whose id derives from both). **Its serialized
-node bytes are not frozen.** The layout depends on (a) the `ContentId` tag-42
-serde repr and (b) the payload / parents field-key strings; it is pinned only
-once Merkle conformance vectors land (post-`0.1.0`). Merkle vectors are
-deliberately kept out of `tests/vectors.json` (the frozen cross-language
-byte-parity gate). Until then, changing the node bytes is **not** a breaking
-change. After `0.1.0` freezes them, it is a breaking release outside `0.1.x`.
+`unstable-merkle` is a no-op alias that enables nothing; `MerkleNode` is in the
+default surface and its bytes are frozen (see "`MerkleNode` bytes" above). The
+alias exists only so manifests that list it keep resolving, and may be removed.
 
 ### The `unstable-store` feature — experimental API
 
@@ -291,6 +296,7 @@ long-lived identity claims.
 [#7]: https://github.com/hartsock/content-addressable/issues/7
 [#8]: https://github.com/hartsock/content-addressable/issues/8
 [#9]: https://github.com/hartsock/content-addressable/issues/9
+[#112]: https://github.com/hartsock/content-addressable/issues/112
 [#10]: https://github.com/hartsock/content-addressable/issues/10
 [#71]: https://github.com/hartsock/content-addressable/issues/71
 [#84]: https://github.com/hartsock/content-addressable/issues/84
