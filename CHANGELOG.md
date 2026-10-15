@@ -15,6 +15,16 @@ Two distributions ship from this one repository and share a version:
 The PyPI **distribution** name is `content-addressable` (hyphen); the **import**
 name is `content_addressable` (underscore).
 
+## [Unreleased]
+
+### Added
+
+- `structures::dir_tree` behind the new default-off `dir-tree` feature
+  ([#105]): `DirNode` / `Link`, `snapshot`, `resolve` and `Proof`. One root
+  `ContentId` names a directory of files, and a path resolves to a file's id
+  with an O(depth) proof that verifies against only the root. Bytes are
+  NON-FROZEN until conformance vectors land (#33).
+
 ## [0.1.2] — 2026-08-27 — the decode side of the contract
 
 This release closes the hole on the *other* side of the codec — decoding ([#90]).
@@ -171,6 +181,7 @@ license further ones. See `docs/STABILITY.md`.
   identity.
 
 [#90]: https://github.com/hartsock/content-addressable/issues/90
+[#105]: https://github.com/hartsock/content-addressable/issues/105
 
 ## [0.1.1] — the identity/classification layer
 
