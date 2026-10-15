@@ -1,0 +1,66 @@
+[
+  {
+    "canonical_dagcbor_hex": "a267706172656e747380677061796c6f61646767656e65736973",
+    "content_id_str": "bafyr4ihxwwv375loic2ys5ohn64cxnmqsobkzlgbq4juqodubg7mha76de",
+    "name": "no_parents",
+    "parents": [],
+    "payload": "genesis"
+  },
+  {
+    "canonical_dagcbor_hex": "a267706172656e747381d82a58250001711e20ae3d6e1ef9219ca87e6c3f304ed7be10d1685e91af3de41f0ff72d6576647a70677061796c6f6164a1616e01",
+    "content_id_str": "bafyr4ihl4hrjzernypwowtrkommn4qacvbqh4expwrinhvnhy7kpfmbm5u",
+    "name": "one_parent",
+    "parents": [
+      "bafyr4ifohvxb56jbtsuh43b7gbhnppqq2fuf5enphxsb6d7xfvsxmzd2oa"
+    ],
+    "payload": {
+      "n": 1
+    }
+  },
+  {
+    "canonical_dagcbor_hex": "a267706172656e747383d82a58250001711e201065eaa76dcd0f2cb6355aed26845945f15bf3ea53087d99a99a562090641c48d82a58250001711e20ada9183698a3a5b8b0b772409d08fe76fbf37840f51176bd8f778930fe5ec376d82a58250001711e20ae3d6e1ef9219ca87e6c3f304ed7be10d1685e91af3de41f0ff72d6576647a70677061796c6f6164a1616e02",
+    "content_id_str": "bafyr4idr2x2rjaky3mv7diopxgm2wtqzwejvjsoyu42rb4u6owcbhh5rqe",
+    "name": "several_parents_shuffled",
+    "parents": [
+      "bafyr4ifnvemdngfduw4lbn3sicoqr7tw7pzxqqhvcf3l3d3xreyp4xwdoy",
+      "bafyr4ifohvxb56jbtsuh43b7gbhnppqq2fuf5enphxsb6d7xfvsxmzd2oa",
+      "bafyr4iaqmxvko3onb4wlmnk25utiiwkf6fn7h2stbb6ztkm2kyqjaza4ja"
+    ],
+    "payload": {
+      "n": 2
+    }
+  },
+  {
+    "canonical_dagcbor_hex": "a267706172656e747382d82a58250001711e201065eaa76dcd0f2cb6355aed26845945f15bf3ea53087d99a99a562090641c48d82a58250001711e20ae3d6e1ef9219ca87e6c3f304ed7be10d1685e91af3de41f0ff72d6576647a70677061796c6f6164a1616e03",
+    "content_id_str": "bafyr4ihr57b5he2jzakqg2o56sqo6tw7s2l4lo2ebqabo5hch4zzd6yzpa",
+    "name": "duplicate_parents",
+    "parents": [
+      "bafyr4ifohvxb56jbtsuh43b7gbhnppqq2fuf5enphxsb6d7xfvsxmzd2oa",
+      "bafyr4iaqmxvko3onb4wlmnk25utiiwkf6fn7h2stbb6ztkm2kyqjaza4ja",
+      "bafyr4ifohvxb56jbtsuh43b7gbhnppqq2fuf5enphxsb6d7xfvsxmzd2oa",
+      "bafyr4iaqmxvko3onb4wlmnk25utiiwkf6fn7h2stbb6ztkm2kyqjaza4ja"
+    ],
+    "payload": {
+      "n": 3
+    }
+  },
+  {
+    "canonical_dagcbor_hex": "a267706172656e747381d82a58250001711e201065eaa76dcd0f2cb6355aed26845945f15bf3ea53087d99a99a562090641c48677061796c6f6164a26161a161628201a16163f6616b6176",
+    "content_id_str": "bafyr4iflq3upeseanqgyv62sgnxagfgbxdpglg4w3vmlhnl6yxgqguypky",
+    "name": "nested_payload",
+    "parents": [
+      "bafyr4iaqmxvko3onb4wlmnk25utiiwkf6fn7h2stbb6ztkm2kyqjaza4ja"
+    ],
+    "payload": {
+      "a": {
+        "b": [
+          1,
+          {
+            "c": null
+          }
+        ]
+      },
+      "k": "v"
+    }
+  }
+]
