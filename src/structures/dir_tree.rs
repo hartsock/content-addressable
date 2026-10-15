@@ -393,9 +393,37 @@ mod tests {
 
         let renamed = node(&[("z.txt", file(b"A")), ("sub", Link::Dir { id: sub })]);
         assert_ne!(base, s.put_node(&renamed).unwrap(), "rename");
+    }
 
-        let moved = node(&[("sub", Link::Dir { id: sub }), ("a.txt", file(b"B"))]);
-        assert_ne!(base, s.put_node(&moved).unwrap(), "move/different content");
+    #[test]
+    fn rename_with_no_sort_change_alters_the_root() {
+        // A one-entry directory: `a` -> `b` cannot reorder anything, so only
+        // an encoding that carries the NAME can tell the roots apart.
+        let mut s = MemoryStore::new();
+        let before = s.put_node(&node(&[("a", file(b"same"))])).unwrap();
+        let after = s.put_node(&node(&[("b", file(b"same"))])).unwrap();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn moving_a_file_between_dirs_alters_the_root_and_spares_the_rest() {
+        let mut s = MemoryStore::new();
+        let mut tree = |x: &[(&str, Link)], y: &[(&str, Link)]| {
+            let x = s.put_node(&node(x)).unwrap();
+            let y = s.put_node(&node(y)).unwrap();
+            let z = s.put_node(&node(&[("g", file(b"untouched"))])).unwrap();
+            let root = node(&[
+                ("x", Link::Dir { id: x }),
+                ("y", Link::Dir { id: y }),
+                ("z", Link::Dir { id: z }),
+            ]);
+            (s.put_node(&root).unwrap(), z)
+        };
+        let f = file(b"moved bytes");
+        let (before, z_before) = tree(&[("f", f)], &[]);
+        let (after, z_after) = tree(&[], &[("f", f)]);
+        assert_ne!(before, after, "same bytes, x/f -> y/f");
+        assert_eq!(z_before, z_after, "untouched subtree keeps its id");
     }
 
     #[test]
@@ -457,5 +485,80 @@ mod tests {
         assert!(matches!(e("sub"), DirTreeError::NotAFile { .. }));
         assert!(matches!(e("sub//b.txt"), DirTreeError::InvalidName { .. }));
         assert!(matches!(e("../a.txt"), DirTreeError::InvalidName { .. }));
+    }
+
+    /// Same shape and key strings as [`DirNode`], but built without
+    /// `DirNode::new`, so it can carry names the name rule forbids.
+    #[derive(Serialize)]
+    struct Unchecked {
+        entries: BTreeMap<String, Link>,
+    }
+
+    impl ContentAddressable for Unchecked {
+        fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+            canonical::to_canonical_dagcbor(self)
+        }
+    }
+
+    /// A correctly addressed, canonical node that holds a bad name beside a
+    /// good one (`a`). Returns (id, canonical bytes).
+    fn malformed(store: &mut MemoryStore, bad: &str) -> (ContentId, Vec<u8>) {
+        let entries = BTreeMap::from([("a".to_owned(), file(b"x")), (bad.to_owned(), file(b"y"))]);
+        let n = Unchecked { entries };
+        let bytes = n.canonical_form().unwrap();
+        (store.put_node(&n).unwrap(), bytes)
+    }
+
+    #[test]
+    fn resolve_rejects_a_decoded_node_with_a_bad_name() {
+        for bad in ["..", "a/b", ".", ""] {
+            let mut s = MemoryStore::new();
+            let (root, _) = malformed(&mut s, bad);
+            let r = resolve(&s, &root, "a");
+            assert!(
+                matches!(r, Err(DirTreeError::InvalidName { .. })),
+                "{bad:?}: {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_rejects_a_decoded_node_with_a_bad_name() {
+        for bad in ["..", "a/b", ".", ""] {
+            let mut s = MemoryStore::new();
+            let (root, bytes) = malformed(&mut s, bad);
+            let proof = Proof {
+                path: vec!["a".into()],
+                nodes: vec![bytes],
+                file: file(b"x"),
+            };
+            let r = proof.verify(&root);
+            assert!(
+                matches!(r, Err(DirTreeError::InvalidName { .. })),
+                "{bad:?}: {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrong_size_in_an_authentic_link_is_caught_by_verify_file() {
+        // The link carries the CORRECT content id but the wrong size, and the
+        // node is correctly addressed, so `verify` honestly returns the claim.
+        let real = b"hello";
+        let lie = Link::File {
+            id: RawContentId::from_content(real),
+            size: 99,
+        };
+        let mut s = MemoryStore::new();
+        let root = s.put_node(&node(&[("f", lie)])).unwrap();
+        let proof = resolve(&s, &root, "f").unwrap();
+        assert_eq!(
+            proof.verify(&root).unwrap(),
+            (RawContentId::from_content(real), 99)
+        );
+        assert!(matches!(
+            proof.verify_file(&root, real),
+            Err(DirTreeError::ProofMismatch)
+        ));
     }
 }

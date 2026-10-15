@@ -80,6 +80,20 @@ fn symlinks_and_fifos_are_refused() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn non_utf8_names_are_refused() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let d = Scratch::new();
+    // Some filesystems (e.g. macOS APFS) refuse to create such a name; skip there.
+    if fs::write(d.0.join(OsStr::from_bytes(b"\xff")), b"x").is_err() {
+        return;
+    }
+    let r = snapshot(&mut MemoryStore::new(), &d.0);
+    assert!(matches!(r, Err(DirTreeError::InvalidName { .. })), "{r:?}");
+}
+
 #[test]
 fn empty_dirs_are_allowed() {
     let d = Scratch::new();
