@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use content_addressable::store::MemoryStore;
-use content_addressable::structures::dir_tree::{resolve, snapshot, DirTreeError};
+use content_addressable::structures::dir_tree::{resolve, snapshot, DirTreeError, Link};
 #[cfg(feature = "multi-digest")]
-use content_addressable::structures::dir_tree::{snapshot_with, DigestAlg, Link};
+use content_addressable::structures::dir_tree::{snapshot_with, DigestAlg};
+use content_addressable::ContentAddressable;
 #[cfg(feature = "multi-digest")]
 use content_addressable::ForeignCid;
 use proptest::prelude::*;
@@ -57,6 +58,53 @@ fn snapshot_is_stable_and_sensitive() {
     assert_ne!(ra, snapshot(&mut s, &b.0).unwrap());
 }
 
+#[test]
+fn a_single_file_snapshots_to_a_file_link_that_resolves_and_verifies() {
+    // #109: a regular file is a root; the cited id is the Link's id.
+    let d = Scratch::new();
+    write(&d.0, "f.txt", b"hello");
+    let mut s = MemoryStore::new();
+    let link = snapshot(&mut s, &d.0.join("f.txt")).unwrap();
+    assert!(matches!(&link, Link::File { size: 5, .. }), "{link:?}");
+    let root = link.content_id().unwrap();
+    let p = resolve(&s, &root, "").unwrap();
+    p.verify_file(&root, b"hello").unwrap();
+    assert!(p.verify_file(&root, b"hellO").is_err());
+    assert!(matches!(
+        resolve(&s, &root, "x"),
+        Err(DirTreeError::NotADirectory { .. })
+    ));
+
+    // the same bytes as a one-file directory get a different root
+    let dir = snapshot(&mut s, &d.0).unwrap();
+    assert!(matches!(dir, Link::Dir { .. }));
+    assert_ne!(dir.content_id().unwrap(), root);
+}
+
+#[cfg(feature = "multi-digest")]
+#[test]
+fn a_single_file_root_carries_and_verifies_extra_digests() {
+    let d = Scratch::new();
+    write(&d.0, "f", b"abc");
+    let mut s = MemoryStore::new();
+    let link = snapshot_with(&mut s, &d.0.join("f"), &[DigestAlg::Sha256, DigestAlg::Md5]).unwrap();
+    let Link::File { also, .. } = &link else {
+        panic!("not a file")
+    };
+    assert_eq!(also.len(), 2);
+    let root = link.content_id().unwrap();
+    let p = resolve(&s, &root, "").unwrap();
+    p.verify_file(&root, b"abc").unwrap();
+    assert!(p.verify_file(&root, b"abd").is_err());
+    assert_ne!(
+        root,
+        snapshot(&mut s, &d.0.join("f"))
+            .unwrap()
+            .content_id()
+            .unwrap()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinks_and_fifos_are_refused() {
@@ -68,6 +116,10 @@ fn symlinks_and_fifos_are_refused() {
         snapshot(&mut s, &d.0),
         Err(DirTreeError::Symlink { .. })
     ));
+    assert!(matches!(
+        snapshot(&mut s, &d.0.join("link")),
+        Err(DirTreeError::Symlink { .. })
+    ));
 
     let f = Scratch::new();
     let fifo = f.0.join("pipe");
@@ -77,6 +129,10 @@ fn symlinks_and_fifos_are_refused() {
         .map(|st| st.success())
         .unwrap_or(false);
     if ok {
+        assert!(matches!(
+            snapshot(&mut s, &fifo),
+            Err(DirTreeError::UnsupportedFileType { .. })
+        ));
         assert!(matches!(
             snapshot(&mut s, &f.0),
             Err(DirTreeError::UnsupportedFileType { .. })
@@ -126,11 +182,11 @@ proptest! {
             write(&d.0, p, b);
         }
         let mut s = MemoryStore::new();
-        let root = snapshot(&mut s, &d.0).unwrap();
+        let root = snapshot(&mut s, &d.0).unwrap().content_id().unwrap();
         let expected: BTreeMap<_, _> = files.iter().collect();
         for (p, b) in expected {
             let proof = resolve(&s, &root, p).unwrap();
-            prop_assert_eq!(proof.nodes.len(), p.split('/').count());
+            prop_assert_eq!(proof.nodes.len(), p.split('/').count() + 1);
             prop_assert!(proof.verify(&root).is_ok());
             prop_assert!(proof.verify_file(&root, b).is_ok());
             let mut bad = b.clone();
@@ -146,10 +202,19 @@ fn snapshot_with_carries_digests_that_verify_file_checks() {
     let d = Scratch::new();
     write(&d.0, "x/f.txt", b"abc");
     let mut s = MemoryStore::new();
-    let plain = snapshot(&mut s, &d.0).unwrap();
-    let multi = snapshot_with(&mut s, &d.0, &[DigestAlg::Sha256, DigestAlg::Md5]).unwrap();
+    let plain = snapshot(&mut s, &d.0).unwrap().content_id().unwrap();
+    let multi = snapshot_with(&mut s, &d.0, &[DigestAlg::Sha256, DigestAlg::Md5])
+        .unwrap()
+        .content_id()
+        .unwrap();
     assert_ne!(plain, multi, "also is part of the hashed node");
-    assert_eq!(plain, snapshot_with(&mut s, &d.0, &[]).unwrap());
+    assert_eq!(
+        plain,
+        snapshot_with(&mut s, &d.0, &[])
+            .unwrap()
+            .content_id()
+            .unwrap()
+    );
 
     let p = resolve(&s, &multi, "x/f.txt").unwrap();
     // Exactly the two RFC digests of "abc" (6234 / 1321): dropping either fails.
