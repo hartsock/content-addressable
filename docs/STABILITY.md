@@ -206,7 +206,7 @@ link form and the CID derivation. Payload bytes are frozen for payloads within
 the crate's canonical data model (`Ipld` and types serializing to it), not for
 an arbitrary `T`. The exact bytes, the CID derivation and the decoder/verifier
 split are specified in [MERKLE_WIRE.md](MERKLE_WIRE.md);
-`tests/merkle_vectors.json` pins five cases, and the Rust and Python gates
+`tests/merkle_vectors.json` pins seven cases, and the Rust and Python gates
 rebuild them from that spec. The vector file's digest is pinned and its
 generator refuses to overwrite it without `MERKLE_VECTORS_REGENERATE=1`. The
 `unstable-merkle` feature remains as a deprecated no-op alias. A layout change

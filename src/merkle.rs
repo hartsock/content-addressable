@@ -33,7 +33,7 @@
 //! crate's canonical data model (`Ipld` and types serializing to it), not for an
 //! arbitrary `T`. The byte-level specification, including which layer rejects
 //! which malformed input, is `docs/MERKLE_WIRE.md`; `tests/merkle_vectors.json`
-//! pins five cases and both language gates rebuild them. The key strings
+//! pins seven cases and both language gates rebuild them. The key strings
 //! `payload` / `parents` are load-bearing for every id. Changing the envelope is
 //! a major version bump.
 

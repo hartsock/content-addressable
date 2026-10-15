@@ -23,6 +23,21 @@ fn cid_of(n: u8) -> ContentId {
     )
 }
 
+/// §2 minimal definite-length array header: 0x80+n, 0x98, 0x99, 0x9a, 0x9b.
+fn array_header(n: usize) -> Vec<u8> {
+    array_header_u64(n as u64)
+}
+
+fn array_header_u64(n: u64) -> Vec<u8> {
+    match n {
+        n if n < 24 => vec![0x80 | n as u8],
+        n if n < 256 => vec![0x98, n as u8],
+        n if n < 65536 => vec![0x99, (n >> 8) as u8, n as u8],
+        n if n < (1 << 32) => [&[0x9a][..], &(n as u32).to_be_bytes()].concat(),
+        n => [&[0x9b][..], &n.to_be_bytes()].concat(),
+    }
+}
+
 /// Independent encoder, straight from docs/MERKLE_WIRE.md §2: map(2), key
 /// "parents" then "payload"; parents = array of `d8 2a 58 25 00 || cid`,
 /// sorted ascending by CID bytes, deduplicated.
@@ -32,12 +47,7 @@ fn spec_bytes(payload: &Ipld, parents: &[ContentId]) -> Vec<u8> {
     cids.dedup();
     let mut out = vec![0xa2, 0x67];
     out.extend_from_slice(b"parents");
-    // §2: minimal definite-length array header.
-    match cids.len() {
-        n if n < 24 => out.push(0x80 | n as u8),
-        n if n < 256 => out.extend_from_slice(&[0x98, n as u8]),
-        n => out.extend_from_slice(&[0x99, (n >> 8) as u8, n as u8]),
-    }
+    out.extend(array_header(cids.len()));
     for c in &cids {
         out.extend_from_slice(&[0xd8, 0x2a, 0x58, 0x25, 0x00]);
         out.extend_from_slice(c);
@@ -345,4 +355,54 @@ fn spec_encoder_reproduces_every_committed_vector() {
     }
     let names: Vec<&str> = vs.iter().map(|v| v.name.as_str()).collect();
     assert!(names.contains(&"parents_24_header_98") && names.contains(&"parents_256_header_99"));
+}
+
+#[test]
+fn array_header_boundaries() {
+    let hex = |n: usize| -> String { array_header(n).iter().map(|b| format!("{b:02x}")).collect() };
+    for (n, want) in [
+        (0, "80"),
+        (23, "97"),
+        (24, "9818"),
+        (255, "98ff"),
+        (256, "990100"),
+        (65535, "99ffff"),
+        (65536, "9a00010000"),
+    ] {
+        assert_eq!(hex(n), want, "n = {n}");
+    }
+    // 2^32 is the first count needing the eight-byte form (checked on a u64).
+    let big: u64 = 1 << 32;
+    assert_eq!(array_header_u64(big), [0x9b, 0, 0, 0, 1, 0, 0, 0, 0]);
+}
+
+/// A real node with 65536 distinct parents: the spec encoder matches production.
+#[test]
+fn spec_encoder_matches_production_at_65536_parents() {
+    let parents: Vec<ContentId> = (0..65536u32)
+        .map(|i| ContentId::from_canonical_bytes(&i.to_be_bytes()))
+        .collect();
+    let node: Node = MerkleNode::new(Ipld::Null, parents.iter().copied());
+    let prod = canonical::to_canonical_dagcbor(&node).unwrap();
+    assert_eq!(&prod[..2 + 7], b"\xa2\x67parents");
+    assert_eq!(&prod[9..14], [0x9a, 0x00, 0x01, 0x00, 0x00]);
+    assert_eq!(prod, spec_bytes(&Ipld::Null, &parents));
+}
+
+/// Payload links are ordinary DAG-CBOR links carrying their OWN CID bytes (any
+/// supported profile); only `parents` is fixed to the 36-byte dag-cbor/BLAKE3
+/// profile (MERKLE_WIRE.md §4, §6). A raw-codec / SHA-256 link in the payload
+/// is accepted by the checked door and the node verifies.
+#[test]
+fn a_payload_link_may_use_a_non_parent_profile() {
+    use ipld_core::cid::{multihash::Multihash, Cid};
+    let mh = Multihash::<64>::wrap(0x12, &[7u8; 32]).unwrap(); // sha2-256
+    let foreign = Cid::new_v1(0x55, mh); // raw codec
+    let node: Node = MerkleNode::new(Ipld::Link(foreign), [cid_of(1)]);
+    let bytes = canonical::to_canonical_dagcbor(&node).unwrap();
+    let back = checked(&bytes).expect("payload link outside the parent profile is accepted");
+    assert_eq!(back, node);
+    let id = ContentId::from_canonical_bytes(&bytes);
+    assert!(back.verify(&id).unwrap());
+    // ...while the same CID as a PARENT is refused (see link_to_a_foreign_cid_profile_is_refused).
 }

@@ -872,15 +872,31 @@ _MERKLE_VECTORS = json.loads(
 )
 
 
+def _array_header(n):
+    """MERKLE_WIRE.md §2 minimal definite-length array header ."""
+    if n < 24:
+        return bytes([0x80 | n])
+    if n < 256:
+        return bytes([0x98, n])
+    if n < 65536:
+        return bytes([0x99, (n >> 8) & 0xFF, n & 0xFF])
+    if n < 2**32:
+        return bytes([0x9A]) + n.to_bytes(4, "big")
+    return bytes([0x9B]) + n.to_bytes(8, "big")
+
+
+@pytest.mark.parametrize(
+    "n,want",
+    [(0, "80"), (23, "97"), (24, "9818"), (255, "98ff"), (256, "990100"),
+     (65535, "99ffff"), (65536, "9a00010000"), (2**32, "9b0000000100000000")],
+)
+def test_merkle_array_header_boundaries(n, want):
+    assert _array_header(n).hex() == want
+
+
 def _merkle_node_bytes(payload, parent_strs):
     parents = sorted({ContentId.parse(s).to_bytes() for s in parent_strs})
-    n = len(parents)
-    # MERKLE_WIRE.md §2: minimal definite-length array header.
-    header = (
-        bytes([0x80 | n]) if n < 24
-        else bytes([0x98, n]) if n < 256
-        else bytes([0x99, n >> 8, n & 0xFF])
-    )
+    header = _array_header(len(parents))
     links = b"".join(bytes([0xD8, 0x2A, 0x58, 1 + len(p), 0x00]) + p for p in parents)
     return (
         bytes([0xA2, 0x67]) + b"parents" + header + links

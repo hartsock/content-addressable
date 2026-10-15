@@ -25,9 +25,11 @@ a2                           map(2)
 
 - **Key order.** DAG-CBOR sorts map keys by length, then bytewise. Both keys are
   7 bytes and `"pare…" < "payl…"` (`r` < `y`), so `parents` always comes first.
-- **Parents array.** Major type 4, definite length, minimal header
-  (`0x80|n` for n < 24, `98 nn` for n < 256, `99 nnnn` beyond; both boundaries
-  are pinned by the 24- and 256-parent vectors).
+- **Parents array.** Major type 4, definite length, minimal header for the
+  count `n`: `0x80|n` for n < 24; `98 nn` for n < 256; `99 nnnn` for n < 65536;
+  `9a nnnnnnnn` for n < 2^32; `9b nnnnnnnnnnnnnnnn` beyond (big-endian). There
+  is no upper limit on `n`. The 24/256 boundaries are pinned by vectors; the
+  larger ones by header tests in both languages and a 65536-parent node.
   Elements are sorted **ascending by the CID's binary bytes** (unsigned
   lexicographic), with exact duplicates removed. All parent CIDs share the same
   four-byte prefix, so this is digest order.
@@ -46,7 +48,10 @@ bytes of §2: the parents and the payload, nothing else.
 
 The payload is encoded by the canonical DAG-CBOR rules: definite lengths,
 minimal integers, map keys text-only and sorted length-first then bytewise, no
-duplicate keys, links as in §2. Cross-language vectors use null, bool, integers,
+duplicate keys. A link inside the payload is an ordinary DAG-CBOR
+tag-42 link carrying its own CID bytes (`d8 2a`, a byte string of `1 + len(cid)`
+bytes starting `00`, then the CID), in **any** supported CID profile. The
+fixed 36-byte dag-cbor/BLAKE3 profile of §2 is a rule for `parents` only. Cross-language vectors use null, bool, integers,
 text, bytes, lists, maps. Floats are outside the cross-language subset.
 
 ## 5. What is frozen
@@ -67,7 +72,8 @@ refusal is the checked door's.
 |---|---|---|
 | Truncated link / bytes | decoder | `DecodingError` |
 | Link missing the leading `00` | decoder | `DecodingError` |
-| Link to a CID outside the crate profile | decoder (`ContentId` profile) | `DecodingError` |
+| **Parent** link to a CID outside the dag-cbor/BLAKE3 profile | decoder (`ContentId` profile) | `DecodingError` |
+| A link in the *payload* to any supported profile (raw, SHA-256, …) | accepted; it is payload data | n/a |
 | Keys out of canonical order (twin) | checked door, canonicality stage | `NonCanonical` |
 | Non-minimal integer (twin) | checked door, canonicality stage | `NonCanonical` |
 | Duplicate map key | decoder | `DecodingError` |
