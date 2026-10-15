@@ -85,3 +85,19 @@ refusal is the checked door's.
 Decoding never sees a "claimed CID"; a CID is only checked by recomputing it.
 A reader holding bytes from an untrusted source uses the checked door **and**
 `verify` against the CID it was told.
+
+## 7. Identity is the canonical form
+
+A node's identity is the CID of its canonical form, always recomputed, never
+taken from the bytes it arrived as.
+
+- **Order.** `parents` is a set. Decoding parents in any order yields the same
+  logical node, so the same canonical bytes and CID. Plain serde decoding
+  normalizes on purpose. The checked door additionally refuses input that was
+  not already canonical, for readers that need the received bytes to be the
+  hashed bytes.
+- **Repeats and cycles.** A parent is a hash link to an existing node, and a
+  node cannot name its own descendant, so parents never form a cycle. A
+  repeated parent adds no edge, and dedup loses nothing. A back-reference or
+  cycle (a symlink, a cited file) belongs in the payload as a link that
+  traversal does not follow, never in `parents`.
