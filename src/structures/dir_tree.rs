@@ -243,6 +243,14 @@ impl DirNode {
     }
 }
 
+/// A root is a [`Link`]: its externally tagged wire form (`file` / `dir`) says
+/// which kind of thing the id names.
+impl ContentAddressable for Link {
+    fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
+        canonical::to_canonical_dagcbor(self)
+    }
+}
+
 impl ContentAddressable for DirNode {
     fn canonical_form(&self) -> Result<Vec<u8>, ContentError> {
         canonical::to_canonical_dagcbor(self)
@@ -298,22 +306,23 @@ pub fn file_link(bytes: &[u8], also: &[DigestAlg]) -> Link {
     }
 }
 
-/// Snapshot the directory at `path` into `store`, returning the root id.
+/// Snapshot the file or directory at `path` into `store`, returning the root
+/// [`Link`]. Cite it by `link.content_id()`, which is also stored, so
+/// [`resolve`] can fetch it.
 ///
-/// Symlinks are refused, as are fifos, sockets and devices; empty directories
-/// are fine. File bytes are hashed, not stored.
+/// A regular file is a [`Link::File`]; a directory is a [`Link::Dir`] naming
+/// its [`DirNode`]. Symlinks are refused, as are fifos, sockets and devices;
+/// empty directories are fine. File bytes are hashed, not stored.
 ///
 /// # Errors
 ///
 /// See [`DirTreeError`].
-pub fn snapshot<S: NodeStore + ?Sized>(
-    store: &mut S,
-    path: &Path,
-) -> Result<ContentId, DirTreeError> {
+pub fn snapshot<S: NodeStore + ?Sized>(store: &mut S, path: &Path) -> Result<Link, DirTreeError> {
     snapshot_root(store, path, &plain_link)
 }
 
-/// [`snapshot`], carrying each digest in `also` on every file link.
+/// [`snapshot`], carrying each digest in `also` on every file link (the root
+/// itself, for a single file).
 ///
 /// # Errors
 ///
@@ -323,7 +332,7 @@ pub fn snapshot_with<S: NodeStore + ?Sized>(
     store: &mut S,
     path: &Path,
     also: &[DigestAlg],
-) -> Result<ContentId, DirTreeError> {
+) -> Result<Link, DirTreeError> {
     snapshot_root(store, path, &|b| file_link(b, also))
 }
 
@@ -334,19 +343,27 @@ fn snapshot_root<S: NodeStore + ?Sized>(
     store: &mut S,
     path: &Path,
     mk: LinkFn<'_>,
-) -> Result<ContentId, DirTreeError> {
+) -> Result<Link, DirTreeError> {
     let meta = fs::symlink_metadata(path).map_err(|e| io_err(path, e))?;
     if meta.file_type().is_symlink() {
         return Err(DirTreeError::Symlink {
             path: path.to_owned(),
         });
     }
-    if !meta.is_dir() {
+    let link = if meta.is_dir() {
+        Link::Dir {
+            id: snapshot_dir(store, path, mk)?,
+        }
+    } else if meta.is_file() {
+        mk(&fs::read(path).map_err(|e| io_err(path, e))?)
+    } else {
         return Err(DirTreeError::UnsupportedFileType {
             path: path.to_owned(),
         });
-    }
-    snapshot_dir(store, path, mk)
+    };
+    validate_link(&link)?;
+    store.put_node(&link)?;
+    Ok(link)
 }
 
 fn io_err(path: &Path, source: io::Error) -> DirTreeError {
@@ -391,8 +408,9 @@ fn snapshot_dir<S: NodeStore + ?Sized>(
     Ok(store.put_node(&DirNode::new(entries)?)?)
 }
 
-/// A path's file link plus the canonical bytes of each directory node on the
-/// way, root first. `nodes.len()` equals the path depth.
+/// A path's file link plus the canonical bytes of the root [`Link`] and then
+/// each directory node on the way. `nodes.len()` is the path depth plus one;
+/// a single-file root has an empty `path` and one node.
 ///
 /// Fields are public: a proof is a plain value, and [`verify`](Self::verify)
 /// trusts none of it.
@@ -400,7 +418,7 @@ fn snapshot_dir<S: NodeStore + ?Sized>(
 pub struct Proof {
     /// The path components, root-relative.
     pub path: Vec<String>,
-    /// Canonical bytes of each node walked, root first.
+    /// Canonical bytes of the root link, then each directory node walked.
     pub nodes: Vec<Vec<u8>>,
     /// The file link found at the end.
     pub file: Link,
@@ -408,19 +426,50 @@ pub struct Proof {
 
 /// Resolve `path` (`/`-separated) under `root` to a file, with its proof.
 ///
+/// `root` is the id of a [`Link`] (see [`snapshot`]). A file root takes the
+/// empty path and proves itself; a directory root takes a non-empty path.
+///
 /// # Errors
 ///
-/// [`DirTreeError::NotFound`], [`DirTreeError::NotADirectory`],
-/// [`DirTreeError::NotAFile`], [`DirTreeError::InvalidName`], or a store error.
+/// [`DirTreeError::NotFound`], [`DirTreeError::NotADirectory`] (a path under a
+/// file, root included), [`DirTreeError::NotAFile`] (empty path on a directory
+/// root, or a path ending at a directory), [`DirTreeError::InvalidName`],
+/// [`DirTreeError::InvalidDigest`] (a decoded link breaks the `also` rules), or
+/// a store error.
 pub fn resolve<S: NodeStore + ?Sized>(
     store: &S,
     root: &ContentId,
     path: &str,
 ) -> Result<Proof, DirTreeError> {
-    let parts: Vec<&str> = path.split('/').collect();
+    let parts: Vec<&str> = if path.is_empty() {
+        Vec::new()
+    } else {
+        path.split('/').collect()
+    };
     parts.iter().try_for_each(|p| validate_name(p))?;
-    let mut nodes = Vec::with_capacity(parts.len());
-    let mut current = *root;
+    let root_link: Link = store.get_node(root)?;
+    validate_link(&root_link)?;
+    let mut nodes = vec![store.get(root)?];
+    let mut current = match root_link {
+        Link::File { .. } if parts.is_empty() => {
+            return Ok(Proof {
+                path: Vec::new(),
+                nodes,
+                file: root_link,
+            })
+        }
+        Link::File { .. } => {
+            return Err(DirTreeError::NotADirectory {
+                path: parts[0].to_owned(),
+            })
+        }
+        Link::Dir { .. } if parts.is_empty() => {
+            return Err(DirTreeError::NotAFile {
+                path: String::new(),
+            })
+        }
+        Link::Dir { id } => id,
+    };
     for (i, part) in parts.iter().enumerate() {
         let so_far = parts[..=i].join("/");
         let bytes = store.get(&current)?;
@@ -454,23 +503,40 @@ impl Proof {
     ///
     /// # Errors
     ///
-    /// [`DirTreeError::ProofMismatch`] if any hop fails;
+    /// [`DirTreeError::ProofMismatch`] if any hop fails, including `nodes[0]`
+    /// not being the root's link, or a file root carrying a path;
     /// [`DirTreeError::InvalidName`] / [`DirTreeError::InvalidDigest`] if a
-    /// decoded node breaks the name or `also` rules.
+    /// decoded link or node breaks the name or `also` rules.
     pub fn verify(&self, root: &ContentId) -> Result<(RawContentId, u64), DirTreeError> {
         let mismatch = || DirTreeError::ProofMismatch;
-        if self.path.is_empty() || self.nodes.len() != self.path.len() {
+        let first = self.nodes.first().ok_or_else(mismatch)?;
+        if ContentId::from_canonical_bytes(first) != *root {
             return Err(mismatch());
         }
-        let mut expected = *root;
-        for (i, (bytes, name)) in self.nodes.iter().zip(&self.path).enumerate() {
+        let root_link = Link::from_canonical_form(first)?;
+        validate_link(&root_link)?;
+        let mut expected = match root_link {
+            Link::File { id, size, .. } => {
+                return if self.path.is_empty() && self.nodes.len() == 1 && root_link == self.file {
+                    Ok((id, size))
+                } else {
+                    Err(mismatch())
+                }
+            }
+            Link::Dir { id } => id,
+        };
+        if self.path.is_empty() || self.nodes.len() != self.path.len() + 1 {
+            return Err(mismatch());
+        }
+        let hops = self.nodes[1..].iter().zip(&self.path);
+        for (i, (bytes, name)) in hops.enumerate() {
             if ContentId::from_canonical_bytes(bytes) != expected {
                 return Err(mismatch());
             }
             let node = DirNode::from_canonical_form(bytes)?;
             node.validate()?;
             let link = node.entries.get(name).ok_or_else(mismatch)?;
-            match (link, i + 1 == self.nodes.len()) {
+            match (link, i + 1 == self.path.len()) {
                 (Link::Dir { id }, false) => expected = *id,
                 (Link::File { id, size, .. }, true) if *link == self.file => {
                     return Ok((*id, *size))
@@ -576,11 +642,17 @@ mod tests {
         DirNode::new(entries.iter().map(|(n, l)| (n.to_string(), l.clone()))).unwrap()
     }
 
-    /// Put a two-level tree: `{a.txt, sub/{b.txt}}`; returns (root, sub).
+    /// Store `dir` and a root [`Link::Dir`] over it; returns the root id.
+    fn dir_root(store: &mut MemoryStore, dir: &DirNode) -> ContentId {
+        let id = store.put_node(dir).unwrap();
+        store.put_node(&Link::Dir { id }).unwrap()
+    }
+
+    /// Put a two-level tree: `{a.txt, sub/{b.txt}}`; returns (root link, sub).
     fn two_level(store: &mut MemoryStore, a: &[u8], b: &[u8]) -> (ContentId, ContentId) {
         let sub = store.put_node(&node(&[("b.txt", file(b))])).unwrap();
         let root = node(&[("a.txt", file(a)), ("sub", Link::Dir { id: sub })]);
-        (store.put_node(&root).unwrap(), sub)
+        (dir_root(store, &root), sub)
     }
 
     #[test]
@@ -656,7 +728,7 @@ mod tests {
         let mut s = MemoryStore::new();
         let (root, _) = two_level(&mut s, b"A", b"hello");
         let p = resolve(&s, &root, "sub/b.txt").unwrap();
-        assert_eq!(p.nodes.len(), 2);
+        assert_eq!(p.nodes.len(), 3, "root link + two dirs");
         let (id, size) = p.verify(&root).unwrap();
         assert_eq!((id, size), (RawContentId::from_content(b"hello"), 5));
         p.verify_file(&root, b"hello").unwrap();
@@ -711,12 +783,23 @@ mod tests {
     }
 
     /// A correctly addressed, canonical node that holds a bad name beside a
-    /// good one (`a`). Returns (id, canonical bytes).
-    fn malformed(store: &mut MemoryStore, bad: &str) -> (ContentId, Vec<u8>) {
+    /// good one (`a`), under a root link. Returns (root, proof nodes).
+    fn malformed(store: &mut MemoryStore, bad: &str) -> (ContentId, Vec<Vec<u8>>) {
         let entries = BTreeMap::from([("a".to_owned(), file(b"x")), (bad.to_owned(), file(b"y"))]);
         let n = Unchecked { entries };
         let bytes = n.canonical_form().unwrap();
-        (store.put_node(&n).unwrap(), bytes)
+        let id = store_id(store, &n);
+        let (root, link) = dir_link(store, id);
+        (root, vec![link, bytes])
+    }
+
+    fn store_id<T: ContentAddressable>(store: &mut MemoryStore, n: &T) -> ContentId {
+        store.put_node(n).unwrap()
+    }
+
+    /// Put a root [`Link::Dir`] over `id`; returns (root, its canonical bytes).
+    fn dir_link(store: &mut MemoryStore, id: ContentId) -> (ContentId, Vec<u8>) {
+        root_of(store, &Link::Dir { id })
     }
 
     #[test]
@@ -736,10 +819,10 @@ mod tests {
     fn verify_rejects_a_decoded_node_with_a_bad_name() {
         for bad in ["..", "a/b", ".", ""] {
             let mut s = MemoryStore::new();
-            let (root, bytes) = malformed(&mut s, bad);
+            let (root, nodes) = malformed(&mut s, bad);
             let proof = Proof {
                 path: vec!["a".into()],
-                nodes: vec![bytes],
+                nodes,
                 file: file(b"x"),
             };
             let r = proof.verify(&root);
@@ -761,7 +844,7 @@ mod tests {
             also: BTreeSet::new(),
         };
         let mut s = MemoryStore::new();
-        let root = s.put_node(&node(&[("f", lie)])).unwrap();
+        let root = dir_root(&mut s, &node(&[("f", lie)]));
         let proof = resolve(&s, &root, "f").unwrap();
         assert_eq!(
             proof.verify(&root).unwrap(),
@@ -771,6 +854,100 @@ mod tests {
             proof.verify_file(&root, real),
             Err(DirTreeError::ProofMismatch)
         ));
+    }
+
+    // ---- single-file roots (#109) ----
+
+    /// Put `link` as a root; returns (root id, its canonical bytes).
+    fn root_of(store: &mut MemoryStore, link: &Link) -> (ContentId, Vec<u8>) {
+        (
+            store.put_node(link).unwrap(),
+            link.canonical_form().unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_file_root_and_a_dir_root_over_the_same_bytes_differ() {
+        let mut s = MemoryStore::new();
+        let (f, _) = root_of(&mut s, &file(b"same"));
+        let dir = s.put_node(&node(&[("f", file(b"same"))])).unwrap();
+        let (d, _) = root_of(&mut s, &Link::Dir { id: dir });
+        assert_ne!(f, d);
+    }
+
+    #[test]
+    fn a_file_root_resolves_empty_path_to_its_own_proof() {
+        let mut s = MemoryStore::new();
+        let (root, bytes) = root_of(&mut s, &file(b"abc"));
+        let p = resolve(&s, &root, "").unwrap();
+        assert_eq!((p.path.len(), p.nodes.clone()), (0, vec![bytes]));
+        assert_eq!(p.file, file(b"abc"));
+        p.verify_file(&root, b"abc").unwrap();
+        assert!(p.verify_file(&root, b"abd").is_err());
+    }
+
+    #[test]
+    fn a_file_root_with_a_path_is_not_a_directory() {
+        let mut s = MemoryStore::new();
+        let (root, _) = root_of(&mut s, &file(b"abc"));
+        let r = resolve(&s, &root, "x");
+        assert!(
+            matches!(r, Err(DirTreeError::NotADirectory { .. })),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn a_dir_root_with_an_empty_path_is_not_a_file() {
+        let mut s = MemoryStore::new();
+        let root = dir_root(&mut s, &node(&[("f", file(b"x"))]));
+        let r = resolve(&s, &root, "");
+        assert!(matches!(r, Err(DirTreeError::NotAFile { .. })), "{r:?}");
+    }
+
+    #[test]
+    fn tampering_nodes_zero_is_a_proof_mismatch() {
+        let mut s = MemoryStore::new();
+        let (root, _) = two_level(&mut s, b"A", b"hello");
+        let p = resolve(&s, &root, "sub/b.txt").unwrap();
+        for i in 0..p.nodes[0].len() {
+            let mut q = p.clone();
+            q.nodes[0][i] ^= 1;
+            assert!(q.verify(&root).is_err(), "root link byte {i}");
+        }
+        let mut q = p.clone();
+        q.nodes.remove(0);
+        assert!(matches!(q.verify(&root), Err(DirTreeError::ProofMismatch)));
+    }
+
+    #[test]
+    fn a_file_link_root_with_a_path_in_the_proof_is_refused() {
+        let mut s = MemoryStore::new();
+        let (root, bytes) = root_of(&mut s, &file(b"abc"));
+        let p = Proof {
+            path: vec!["x".into()],
+            nodes: vec![bytes.clone(), bytes],
+            file: file(b"abc"),
+        };
+        assert!(matches!(p.verify(&root), Err(DirTreeError::ProofMismatch)));
+        let p = Proof {
+            path: vec!["x".into()],
+            nodes: vec![p.nodes[0].clone()],
+            file: file(b"abc"),
+        };
+        assert!(matches!(p.verify(&root), Err(DirTreeError::ProofMismatch)));
+    }
+
+    #[test]
+    fn a_file_root_with_a_swapped_file_link_is_refused() {
+        let mut s = MemoryStore::new();
+        let (root, bytes) = root_of(&mut s, &file(b"abc"));
+        let p = Proof {
+            path: vec![],
+            nodes: vec![bytes],
+            file: file(b"abd"),
+        };
+        assert!(matches!(p.verify(&root), Err(DirTreeError::ProofMismatch)));
     }
 
     // ---- multi-digest (#107) ----
@@ -799,8 +976,8 @@ mod tests {
     }
 
     /// Store a correctly addressed node whose only entry `f` carries `also`
-    /// verbatim; returns (root, canonical bytes).
-    fn wire(store: &mut MemoryStore, b: &[u8], also: Vec<ForeignCid>) -> (ContentId, Vec<u8>) {
+    /// verbatim; returns (root link, proof nodes).
+    fn wire(store: &mut MemoryStore, b: &[u8], also: Vec<ForeignCid>) -> (ContentId, Vec<Vec<u8>>) {
         let link = WireLink::File {
             id: RawContentId::from_content(b),
             size: b.len() as u64,
@@ -810,7 +987,9 @@ mod tests {
             entries: BTreeMap::from([("f".to_owned(), link)]),
         };
         let bytes = n.canonical_form().unwrap();
-        (store.put_node(&n).unwrap(), bytes)
+        let id = store_id(store, &n);
+        let (root, link) = dir_link(store, id);
+        (root, vec![link, bytes])
     }
 
     #[test]
@@ -822,6 +1001,18 @@ mod tests {
         assert_eq!(
             root.to_string(),
             "bafyr4igvpbbq3rya5jit6cirnlfvq3k6hx3lde2k4hzfyroggjxhhr2zsy"
+        );
+    }
+
+    #[test]
+    fn dir_node_bytes_are_pinned_across_the_link_root_change() {
+        // #109: DirNode bytes must not change. Captured on 21ffa61, BEFORE
+        // single-file roots; a nested tree so a Dir link is covered too.
+        let sub = node(&[("b", file(b"bee"))]).content_id().unwrap();
+        let root = node(&[("a", file(b"abc")), ("sub", Link::Dir { id: sub })]);
+        assert_eq!(
+            root.content_id().unwrap().to_string(),
+            "bafyr4idqcqizht5j4m53lpnfy3wnnmxr3iazj2hp5trcdphbdxt6xelm2m"
         );
     }
 
@@ -867,7 +1058,7 @@ mod tests {
         );
 
         let mut s = MemoryStore::new();
-        let (root, bytes) = wire(&mut s, b"x", vec![bad]);
+        let (root, nodes) = wire(&mut s, b"x", vec![bad]);
         let r = resolve(&s, &root, "f");
         assert!(
             matches!(r, Err(DirTreeError::InvalidDigest { .. })),
@@ -875,7 +1066,7 @@ mod tests {
         );
         let proof = Proof {
             path: vec!["f".into()],
-            nodes: vec![bytes],
+            nodes,
             file: file(b"x"),
         };
         let r = proof.verify(&root);
@@ -898,7 +1089,7 @@ mod tests {
         );
 
         let mut s = MemoryStore::new();
-        let (root, bytes) = wire(&mut s, b"x", vec![a, b]);
+        let (root, nodes) = wire(&mut s, b"x", vec![a, b]);
         let r = resolve(&s, &root, "f");
         assert!(
             matches!(r, Err(DirTreeError::InvalidDigest { .. })),
@@ -906,7 +1097,7 @@ mod tests {
         );
         let proof = Proof {
             path: vec!["f".into()],
-            nodes: vec![bytes],
+            nodes,
             file: file(b"x"),
         };
         let r = proof.verify(&root);
@@ -921,9 +1112,7 @@ mod tests {
         // sha2-512 (0x13) is never computable here, feature or not.
         let sha512 = foreign(0x55, 0x13, &[0u8; 64]);
         let mut s = MemoryStore::new();
-        let root = s
-            .put_node(&node(&[("f", file_also(b"abc", &[sha512]))]))
-            .unwrap();
+        let root = dir_root(&mut s, &node(&[("f", file_also(b"abc", &[sha512]))]));
         let p = resolve(&s, &root, "f").unwrap();
         let r = p.verify_file(&root, b"abc");
         assert!(
@@ -936,9 +1125,7 @@ mod tests {
     #[test]
     fn without_the_feature_even_sha256_is_unsupported() {
         let mut s = MemoryStore::new();
-        let root = s
-            .put_node(&node(&[("f", file_also(b"abc", &[abc_sha256()]))]))
-            .unwrap();
+        let root = dir_root(&mut s, &node(&[("f", file_also(b"abc", &[abc_sha256()]))]));
         let p = resolve(&s, &root, "f").unwrap();
         let r = p.verify_file(&root, b"abc");
         assert!(
@@ -953,7 +1140,7 @@ mod tests {
 
         fn proof_for(link: Link) -> (Proof, ContentId) {
             let mut s = MemoryStore::new();
-            let root = s.put_node(&node(&[("f", link)])).unwrap();
+            let root = dir_root(&mut s, &node(&[("f", link)]));
             (resolve(&s, &root, "f").unwrap(), root)
         }
 
