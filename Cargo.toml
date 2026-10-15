@@ -62,6 +62,13 @@ unstable-legacy = []
 # changes are stated, never implied. Default-OFF; its field names are
 # load-bearing for the record's id and NON-FROZEN until its vectors land.
 unstable-migration = []
+# `dir-tree` gates the experimental content-addressed directory tree
+# (`src/structures/dir_tree.rs`, issue #105): `DirNode` / `Link` / `snapshot` /
+# `resolve` / `Proof`, one root `ContentId` for a directory of files. It rides
+# on the node-store seam, hence `unstable-store`. Default-OFF and NON-FROZEN:
+# its bytes are not in tests/vectors.json until conformance vectors land (#33).
+# CI and the pre-push hook exercise it via `--all-features`.
+dir-tree = ["unstable-store"]
 
 [dependencies]
 # ipld-core re-exports the `cid` crate (as ipld_core::cid) which in turn
@@ -87,3 +94,5 @@ thiserror = "2"
 # the generator that (re)materializes it. NOT a core dependency — the published
 # crate never pulls serde_json. See tests/vectors.rs and tests/gen_vectors.rs.
 serde_json = "1"
+# Test-only: property tests for the directory tree (tests/dir_tree.rs).
+proptest = "1"
