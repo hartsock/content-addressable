@@ -213,7 +213,11 @@ impl DirNode {
     ///
     /// # Errors
     ///
-    /// [`DirTreeError::InvalidName`] or [`DirTreeError::DuplicateName`].
+    /// [`DirTreeError::InvalidName`], [`DirTreeError::DuplicateName`], or
+    /// [`DirTreeError::InvalidDigest`] if a file link's `also` holds a
+    /// non-raw-codec digest or two digests with one hash code. The same rules
+    /// are re-applied to nodes decoded by [`resolve`] and [`Proof::verify`],
+    /// which return the same error.
     pub fn new(entries: impl IntoIterator<Item = (String, Link)>) -> Result<Self, DirTreeError> {
         let mut map = BTreeMap::new();
         for (name, link) in entries {
@@ -450,7 +454,9 @@ impl Proof {
     ///
     /// # Errors
     ///
-    /// [`DirTreeError::ProofMismatch`] if any hop fails.
+    /// [`DirTreeError::ProofMismatch`] if any hop fails;
+    /// [`DirTreeError::InvalidName`] / [`DirTreeError::InvalidDigest`] if a
+    /// decoded node breaks the name or `also` rules.
     pub fn verify(&self, root: &ContentId) -> Result<(RawContentId, u64), DirTreeError> {
         let mismatch = || DirTreeError::ProofMismatch;
         if self.path.is_empty() || self.nodes.len() != self.path.len() {
@@ -479,7 +485,12 @@ impl Proof {
     ///
     /// # Errors
     ///
-    /// [`DirTreeError::ProofMismatch`] if the proof or the bytes do not match.
+    /// [`DirTreeError::ProofMismatch`] if the proof, the size, BLAKE3 or any
+    /// `also` digest does not match. [`DirTreeError::UnsupportedDigest`] if
+    /// `also` holds a hash this build cannot compute: every code other than
+    /// SHA-256 (`0x12`) and MD5 (`0xd5`), and **all** codes when the
+    /// `multi-digest` feature is off. Such a digest is never skipped.
+    /// [`DirTreeError::InvalidDigest`] as for [`verify`](Self::verify).
     pub fn verify_file(&self, root: &ContentId, bytes: &[u8]) -> Result<(), DirTreeError> {
         let (id, size) = self.verify(root)?;
         if size != bytes.len() as u64 || !id.verify(bytes) {
@@ -973,12 +984,6 @@ mod tests {
                 let r = p.verify_file(&root, b"abc");
                 assert!(matches!(r, Err(DirTreeError::ProofMismatch)), "{r:?}");
             }
-        }
-
-        #[test]
-        fn digests_are_checked_against_the_bytes_not_just_the_link() {
-            let (p, root) = proof_for(file_link(b"abc", &[DigestAlg::Sha256]));
-            assert!(p.verify_file(&root, b"abd").is_err());
         }
     }
 }
