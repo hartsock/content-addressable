@@ -638,7 +638,6 @@ fn store_error_is_send_sync_static() {
     fn assert_send_sync_static<T: Send + Sync + 'static>() {}
     assert_send_sync_static::<StoreError>();
 }
-#[cfg(feature = "unstable-merkle")]
 mod merkle_integration {
     //! The seam's reason to exist, exercised end to end: (root CID, store)
     //! fully determines a `MerkleNode` DAG.

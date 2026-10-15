@@ -161,12 +161,13 @@ surface is exactly:
   default-off, experimental `unstable-migration` feature (see the `migration`
   module); the `legacy` adapters live under `unstable-legacy` (the `legacy`
   module) and are not re-exported at the root.
-- [`MerkleNode`] — re-exported **only** when the default-off, experimental
-  `unstable-merkle` feature is enabled; its bytes are not yet frozen (see [`merkle`]).
+- [`MerkleNode`] — re-exported by default; its bytes are frozen and pinned by
+  `tests/merkle_vectors.json` (see [`merkle`]). The `unstable-merkle` feature is a
+  deprecated no-op alias.
 
 The default-off, experimental **`unstable-store`** feature adds a further set of
 re-exports (`NodeStore`, `NodeStoreExt`, `MemoryStore`, `VerifiedStore`,
-`AddressedBytes`, `StoreError`, `StoreOperation` — see [`store`]). Like `MerkleNode`, these are **not part of the frozen `0.1.0`
+`AddressedBytes`, `StoreError`, `StoreOperation` — see [`store`]). Unlike `MerkleNode`, these are **not part of the frozen `0.1.0`
 surface**: the seam's trait API may change until the catalog stabilizes, so
 it is enumerated here for completeness but explicitly excluded from the
 stability contract above.

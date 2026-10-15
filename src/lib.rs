@@ -21,7 +21,6 @@ pub mod trait_def;
 // --- Seams the catalog builds on (feature-gated infrastructure). ---
 #[cfg(feature = "unstable-legacy")]
 pub mod legacy;
-#[cfg(feature = "unstable-merkle")]
 pub mod merkle;
 #[cfg(feature = "unstable-migration")]
 pub mod migration;
@@ -40,7 +39,6 @@ pub mod structures;
 pub use classified::{ClassifiedCid, ForeignCid};
 pub use content_id::ContentId;
 pub use error::ContentError;
-#[cfg(feature = "unstable-merkle")]
 pub use merkle::MerkleNode;
 #[cfg(feature = "unstable-migration")]
 pub use migration::{IdentityMigration, MigrationKind};
