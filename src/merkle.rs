@@ -25,29 +25,17 @@
 //!   [`to_canonical_dagcbor`](crate::canonical::to_canonical_dagcbor) — no
 //!   bespoke canonicalization.
 //!
-//! # ⚠️ BYTES ARE NON-FROZEN (experimental, default-off feature)
+//! # Frozen bytes
 //!
-//! Unlike the frozen [`ContentId`] / [`canonical`] surface,
-//! **a [`MerkleNode`]'s exact serialized bytes are NOT frozen.** This module is
-//! gated behind the experimental, default-**off** `unstable-merkle` cargo feature, and
-//! its byte layout is pinned only once Merkle conformance vectors land (a
-//! later 0.1.x release). The node's bytes depend on two things that are
-//! not yet jointly frozen:
-//!
-//! 1. **The [`ContentId`] tag-42 serde representation** — README must-fix gate
-//!    item 1. Each parent link is encoded through it, so the node inherits its
-//!    status. (That repr is itself now frozen, but the *node* layout that embeds
-//!    it is not yet covered by cross-language vectors.)
-//! 2. **The `payload` / `parents` field key strings.** dag-cbor sorts map keys
-//!    on the wire, so field *declaration* order does not matter — but the key
-//!    *strings* are load-bearing for the hash. Renaming a field changes every
-//!    node's id.
-//!
-//! Until the Merkle conformance vectors freeze these, changing the node's bytes
-//! is **allowed and does not constitute a breaking change**. Do **not** add
-//! merkle vectors to `tests/vectors.json` — that file is the frozen,
-//! cross-language byte-parity gate and deliberately excludes this experimental
-//! surface. After `0.1.0`, changing these bytes is a major version bump.
+//! The **envelope** of a [`MerkleNode`] is frozen: the dag-cbor map
+//! `{"parents": [tag-42 links, sorted by CID bytes, deduplicated], "payload": …}`
+//! and the CID derived from it. Payload bytes are frozen for payloads inside the
+//! crate's canonical data model (`Ipld` and types serializing to it), not for an
+//! arbitrary `T`. The byte-level specification, including which layer rejects
+//! which malformed input, is `docs/MERKLE_WIRE.md`; `tests/merkle_vectors.json`
+//! pins seven cases and both language gates rebuild them. The key strings
+//! `payload` / `parents` are load-bearing for every id. Changing the envelope is
+//! a major version bump.
 
 use std::collections::BTreeSet;
 
@@ -93,14 +81,11 @@ use crate::trait_def::ContentAddressable;
 /// [`content_id`](crate::ContentAddressable::content_id) / [`verify`](crate::ContentAddressable::verify) come for free and the id is over the *whole* node
 /// including its parent links.
 ///
-/// # ⚠️ Non-frozen bytes
+/// # Frozen bytes
 ///
-/// The exact serialized bytes of a `MerkleNode` are **NOT frozen** — see the
-/// [module docs](self#-bytes-are-non-frozen-experimental-default-off-feature).
-/// They depend on (a) the [`ContentId`] tag-42 serde repr (must-fix gate item 1)
-/// and (b) the `payload` / `parents` field key strings. A follow-up "Merkle
-/// conformance vectors" issue freezes them in a later 0.1.x release; until then they may
-/// change without it being a breaking change.
+/// The serialized bytes are frozen and pinned by `tests/merkle_vectors.json`; see
+/// the [module docs](self#frozen-bytes). The `payload` / `parents` key strings
+/// are part of every node's id.
 ///
 /// # Examples
 ///
@@ -124,14 +109,14 @@ pub struct MerkleNode<T> {
     /// The node's content.
     ///
     /// The field *key string* `"payload"` is load-bearing for the node's id and
-    /// part of the (non-frozen) byte layout — see the [module docs](self).
+    /// part of the frozen byte layout — see the [module docs](self#frozen-bytes).
     pub payload: T,
     /// The causal parent links, as a deterministically-ordered, deduplicated
     /// set of [`ContentId`]s.
     ///
     /// Each element serializes as a dag-cbor tag-42 link. The field *key string*
     /// `"parents"` is load-bearing for the node's id and part of the
-    /// (non-frozen) byte layout — see the [module docs](self).
+    /// frozen byte layout — see the [module docs](self#frozen-bytes).
     pub parents: BTreeSet<ContentId>,
 }
 

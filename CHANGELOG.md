@@ -19,6 +19,10 @@ name is `content_addressable` (underscore).
 
 ### Added
 
+- **`MerkleNode` bytes are frozen** (#112): cross-language vectors in
+  `tests/merkle_vectors.json`, checked in Rust and Python. `MerkleNode` is in the
+  default surface; `unstable-merkle` is now a deprecated no-op alias.
+
 - `dir_tree` single-file roots ([#109]): `Link` is now `ContentAddressable`, and
   `snapshot` / `snapshot_with` return the root `Link` (also stored), so a
   regular file is a root: `resolve(store, &link.content_id()?, "")` proves it

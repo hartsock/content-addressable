@@ -138,7 +138,7 @@
 //! assert_eq!(back, record);
 //! ```
 //!
-//! With the `unstable-merkle` feature also enabled, a whole [`MerkleNode`] DAG is
+//! A whole [`MerkleNode`] DAG is
 //! reconstructible from its root id the same way — see `tests/store.rs` (the
 //! seam's whole test suite lives there, separated from source) for the
 //! traversal pattern and the laws' executable counterparts.

@@ -34,7 +34,9 @@ who may assert a migration and how to sign it.
 Its fields are private. `Deserialize` uses the same constructor and rejects
 unknown fields. The record's field names are not frozen.
 
-## `unstable-merkle`
+## `unstable-merkle` (deprecated alias)
+
+`MerkleNode` is now in the default, frozen surface; the feature enables nothing.
 
 `MerkleNode<T>` combines `payload: T` with `parents: BTreeSet<ContentId>` and
 derives its id from both. The parent set deduplicates and sorts links by
@@ -42,7 +44,7 @@ content-derived `Ord`, so insertion order cannot affect the node's bytes.
 Each parent serializes as a DAG-CBOR tag-42 link.
 
 ```rust
-use content_addressable::merkle::MerkleNode; // feature = "unstable-merkle"
+use content_addressable::merkle::MerkleNode;
 
 let root = MerkleNode::genesis("hello");
 let root_id = root.id()?;
@@ -51,8 +53,7 @@ assert!(child.parents().contains(&root_id));
 # Ok::<(), content_addressable::ContentError>(())
 ```
 
-The serialized node layout is not frozen. Merkle conformance vectors remain
-future work.
+The serialized node layout is frozen; see `tests/merkle_vectors.json`.
 
 ## `unstable-store`
 

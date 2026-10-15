@@ -117,7 +117,6 @@ for frozen bytes, APIs, and compatibility details.
 
 All `unstable-*` features are off by default and may change:
 
-- `unstable-merkle`: content-addressed DAG nodes.
 - `unstable-store`: verified storage operations and an in-memory backend.
 - `unstable-legacy`: parsers for legacy identifier formats.
 - `unstable-migration`: records of identity changes.
