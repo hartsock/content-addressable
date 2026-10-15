@@ -14,7 +14,8 @@
 //!
 //! # What is stored
 //!
-//! [`snapshot`] puts only the dag-cbor directory nodes in the [`NodeStore`].
+//! [`snapshot`] puts the root [`Link`] in the [`NodeStore`], and for a
+//! directory also each dag-cbor [`DirNode`] under it.
 //! File **bytes are not stored**; a file is cited by its [`RawContentId`] and
 //! the caller keeps the bytes (check them with [`Proof::verify_file`]).
 //!
@@ -946,6 +947,48 @@ mod tests {
             path: vec![],
             nodes: vec![bytes],
             file: file(b"abd"),
+        };
+        assert!(matches!(p.verify(&root), Err(DirTreeError::ProofMismatch)));
+    }
+
+    #[test]
+    fn a_file_root_with_a_malformed_also_is_invalid_digest_on_resolve_and_verify() {
+        // #109 review: root links are decoded from untrusted bytes too.
+        let non_raw = foreign(0x71, 0x12, &[0u8; 32]);
+        let dup = [
+            foreign(0x55, 0x12, &[1u8; 32]),
+            foreign(0x55, 0x12, &[2u8; 32]),
+        ];
+        for also in [&[non_raw][..], &dup[..]] {
+            let link = file_also(b"x", also);
+            let mut s = MemoryStore::new();
+            let (root, bytes) = root_of(&mut s, &link);
+            let r = resolve(&s, &root, "");
+            assert!(
+                matches!(r, Err(DirTreeError::InvalidDigest { .. })),
+                "{r:?}"
+            );
+            let proof = Proof {
+                path: vec![],
+                nodes: vec![bytes],
+                file: link,
+            };
+            let r = proof.verify(&root);
+            assert!(
+                matches!(r, Err(DirTreeError::InvalidDigest { .. })),
+                "{r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_root_proof_with_a_surplus_node_is_refused() {
+        let mut s = MemoryStore::new();
+        let (root, bytes) = root_of(&mut s, &file(b"abc"));
+        let p = Proof {
+            path: vec![],
+            nodes: vec![bytes.clone(), bytes],
+            file: file(b"abc"),
         };
         assert!(matches!(p.verify(&root), Err(DirTreeError::ProofMismatch)));
     }
