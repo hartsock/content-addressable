@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use content_addressable::store::MemoryStore;
+#[cfg(feature = "multi-digest")]
 use content_addressable::store::NodeStoreExt;
 use content_addressable::structures::dir_tree::{resolve, snapshot, DirTreeError, Link};
 #[cfg(feature = "multi-digest")]
