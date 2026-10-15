@@ -17,6 +17,14 @@ name is `content_addressable` (underscore).
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-10-15 — MerkleNode frozen; directory trees
+
+`MerkleNode` joins the frozen `0.1.x` surface, and directory trees arrive as
+experimental, default-off features. Every existing golden vector is
+byte-identical, and every identifier minted under earlier `0.1.x` releases
+remains valid. The `dir_tree` breaking notes below apply only to the new,
+non-frozen features.
+
 ### Added
 
 - **`MerkleNode` bytes are frozen** (#112): cross-language vectors in
@@ -350,6 +358,7 @@ release outside `0.1.x`.
 - Non-integer floats are outside the canonical vector set (DAG-CBOR float rules
   are handled per-language, not in the shared cross-language gate).
 
+[0.1.3]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.3
 [0.1.2]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.2
 [0.1.1]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.1
 [0.1.0]: https://github.com/hartsock/content-addressable/releases/tag/v0.1.0
