@@ -26,7 +26,8 @@ a2                           map(2)
 - **Key order.** DAG-CBOR sorts map keys by length, then bytewise. Both keys are
   7 bytes and `"pare…" < "payl…"` (`r` < `y`), so `parents` always comes first.
 - **Parents array.** Major type 4, definite length, minimal header
-  (`0x80|n` for n < 24, `98 nn` for n < 256, `99 nnnn` beyond).
+  (`0x80|n` for n < 24, `98 nn` for n < 256, `99 nnnn` beyond; both boundaries
+  are pinned by the 24- and 256-parent vectors).
   Elements are sorted **ascending by the CID's binary bytes** (unsigned
   lexicographic), with exact duplicates removed. All parent CIDs share the same
   four-byte prefix, so this is digest order.

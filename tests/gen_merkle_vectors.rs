@@ -43,6 +43,13 @@ fn gen_merkle_vectors() {
             vec![p2],
         ),
     ];
+    // Array-header boundaries (MERKLE_WIRE.md §2): 24 -> 0x98 0x18, 256 -> 0x99 0x0100.
+    let many = |n: usize| -> Vec<ContentId> {
+        (0..n).map(|i| cid_of(&format!("\"parent-{i}\""))).collect()
+    };
+    let mut cases = cases;
+    cases.push(("parents_24_header_98", "{\"n\": 24}", many(24)));
+    cases.push(("parents_256_header_99", "{\"n\": 256}", many(256)));
     let out: Vec<serde_json::Value> = cases
         .into_iter()
         .map(|(name, payload, parents)| {

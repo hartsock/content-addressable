@@ -30,13 +30,14 @@ fn spec_bytes(payload: &Ipld, parents: &[ContentId]) -> Vec<u8> {
     let mut cids: Vec<Vec<u8>> = parents.iter().map(ContentId::to_bytes).collect();
     cids.sort();
     cids.dedup();
-    assert!(
-        cids.len() < 24,
-        "test fixtures stay within the 1-byte array header"
-    );
     let mut out = vec![0xa2, 0x67];
     out.extend_from_slice(b"parents");
-    out.push(0x80 | cids.len() as u8);
+    // §2: minimal definite-length array header.
+    match cids.len() {
+        n if n < 24 => out.push(0x80 | n as u8),
+        n if n < 256 => out.extend_from_slice(&[0x98, n as u8]),
+        n => out.extend_from_slice(&[0x99, (n >> 8) as u8, n as u8]),
+    }
     for c in &cids {
         out.extend_from_slice(&[0xd8, 0x2a, 0x58, 0x25, 0x00]);
         out.extend_from_slice(c);
@@ -110,7 +111,7 @@ proptest! {
 
 /// BLAKE3 of the committed `tests/merkle_vectors.json`. Regenerating the file
 /// changes this; updating it is a conscious, reviewable act in the same diff.
-const VECTORS_BLAKE3: &str = "f42357425a3a81adadabfa4bfb61490f168a2d2388880b9e09fb7554e9d43620";
+const VECTORS_BLAKE3: &str = "2ea59ff2aaa5c28173a346d6ad969f58525952d7e3eb60f77a0ec0f3ecfed005";
 
 #[test]
 fn committed_vector_file_is_pinned() {
@@ -322,4 +323,26 @@ fn a_claimed_cid_that_does_not_match_the_bytes_fails_verification_not_decoding()
     // Decoding has no notion of a claimed id; verification is where it fails.
     assert!(!node.verify(&cid_of(9)).unwrap());
     assert!(node.verify(&node.id().unwrap()).unwrap());
+}
+
+/// The spec encoder reproduces every committed vector, including the 0x98 and
+/// 0x99 array-header boundaries (24 and 256 parents).
+#[test]
+fn spec_encoder_reproduces_every_committed_vector() {
+    #[derive(serde::Deserialize)]
+    struct V {
+        name: String,
+        payload: serde_json::Value,
+        parents: Vec<String>,
+        canonical_dagcbor_hex: String,
+    }
+    let vs: Vec<V> = serde_json::from_str(include_str!("merkle_vectors.json")).unwrap();
+    for v in &vs {
+        let parents: Vec<ContentId> = v.parents.iter().map(|s| s.parse().unwrap()).collect();
+        let got = spec_bytes(&json_value_to_ipld(&v.payload), &parents);
+        let hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, v.canonical_dagcbor_hex, "{}", v.name);
+    }
+    let names: Vec<&str> = vs.iter().map(|v| v.name.as_str()).collect();
+    assert!(names.contains(&"parents_24_header_98") && names.contains(&"parents_256_header_99"));
 }

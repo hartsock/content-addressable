@@ -874,10 +874,16 @@ _MERKLE_VECTORS = json.loads(
 
 def _merkle_node_bytes(payload, parent_strs):
     parents = sorted({ContentId.parse(s).to_bytes() for s in parent_strs})
-    assert len(parents) <= 23, "vectors stay within the one-byte array header"
+    n = len(parents)
+    # MERKLE_WIRE.md §2: minimal definite-length array header.
+    header = (
+        bytes([0x80 | n]) if n < 24
+        else bytes([0x98, n]) if n < 256
+        else bytes([0x99, n >> 8, n & 0xFF])
+    )
     links = b"".join(bytes([0xD8, 0x2A, 0x58, 1 + len(p), 0x00]) + p for p in parents)
     return (
-        bytes([0xA2, 0x67]) + b"parents" + bytes([0x80 + len(parents)]) + links
+        bytes([0xA2, 0x67]) + b"parents" + header + links
         + bytes([0x67]) + b"payload" + to_canonical_dagcbor(payload)
     )
 

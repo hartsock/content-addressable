@@ -31,6 +31,8 @@ fn merkle_vectors_reproduce() {
         "several_parents_shuffled",
         "duplicate_parents",
         "nested_payload",
+        "parents_24_header_98",
+        "parents_256_header_99",
     ] {
         assert!(names.contains(&required), "missing vector {required}");
     }
