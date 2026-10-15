@@ -94,10 +94,18 @@ taken from the bytes it arrived as.
 - **Order.** `parents` is a set. Decoding parents in any order yields the same
   logical node, so the same canonical bytes and CID. Plain serde decoding
   normalizes on purpose. The checked door additionally refuses input that was
-  not already canonical, for readers that need the received bytes to be the
+  not already canonical for the typed node (§6), for readers that need the received bytes to be the
   hashed bytes.
-- **Repeats and cycles.** A parent is a hash link to an existing node, and a
-  node cannot name its own descendant, so parents never form a cycle. A
-  repeated parent adds no edge, and dedup loses nothing. A back-reference or
-  cycle (a symlink, a cited file) belongs in the payload as a link that
-  traversal does not follow, never in `parents`.
+- **Repeats.** `parents` has set semantics (§1). A repeated parent adds no
+  edge, so dedup loses nothing.
+- **Cycles are not checked here.** Decoding and verification never resolve a
+  parent: they don't establish that it exists, that it is a `MerkleNode`, or
+  that the graph is acyclic. Those are application invariants. A cycle of
+  content links would need a hash fixed point, but traversals must not rely on
+  that: keep a visited set (see the reconstruction example in `tests/store.rs`).
+- **Back-references.** Any CID in the payload is hashed into the node's CID
+  just as parents are, so it cannot name a node that is built from this one. A
+  reference that may close a cycle (a symlink, say) is stored as something
+  other than a content link, such as its target path, and a parent-edge
+  traversal does not follow it. That is consumer policy; this crate has no
+  generic traversal that enforces it.
