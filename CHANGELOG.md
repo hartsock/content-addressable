@@ -19,6 +19,14 @@ name is `content_addressable` (underscore).
 
 ### Added
 
+- `dir_tree` single-file roots ([#109]): `Link` is now `ContentAddressable`, and
+  `snapshot` / `snapshot_with` return the root `Link` (also stored), so a
+  regular file is a root: `resolve(store, &link.content_id()?, "")` proves it
+  and `verify_file` checks it, extra digests included. A file root and a
+  directory root over the same bytes have different ids; `DirNode` bytes are
+  unchanged. **Breaking (experimental, non-frozen):** `snapshot` returns `Link`
+  not `ContentId`; `resolve` / `Proof::verify` take a `Link` id; `Proof.nodes[0]`
+  is the root link's bytes, so `nodes.len()` is depth + 1.
 - `structures::dir_tree` behind the new default-off `dir-tree` feature
   ([#105]): `DirNode` / `Link`, `snapshot`, `resolve` and `Proof`. One root
   `ContentId` names a directory of files, and a path resolves to a file's id
@@ -189,6 +197,7 @@ license further ones. See `docs/STABILITY.md`.
 [#90]: https://github.com/hartsock/content-addressable/issues/90
 [#105]: https://github.com/hartsock/content-addressable/issues/105
 [#107]: https://github.com/hartsock/content-addressable/issues/107
+[#109]: https://github.com/hartsock/content-addressable/issues/109
 
 ## [0.1.1] — the identity/classification layer
 
