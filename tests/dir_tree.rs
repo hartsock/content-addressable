@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use content_addressable::store::MemoryStore;
 use content_addressable::structures::dir_tree::{resolve, snapshot, DirTreeError};
+#[cfg(feature = "multi-digest")]
+use content_addressable::structures::dir_tree::{snapshot_with, DigestAlg};
 use proptest::prelude::*;
 
 /// A unique scratch dir, removed on drop.
@@ -134,4 +136,20 @@ proptest! {
             prop_assert!(proof.verify_file(&root, &bad).is_err());
         }
     }
+}
+
+#[cfg(feature = "multi-digest")]
+#[test]
+fn snapshot_with_carries_digests_that_verify_file_checks() {
+    let d = Scratch::new();
+    write(&d.0, "x/f.txt", b"abc");
+    let mut s = MemoryStore::new();
+    let plain = snapshot(&mut s, &d.0).unwrap();
+    let multi = snapshot_with(&mut s, &d.0, &[DigestAlg::Sha256, DigestAlg::Md5]).unwrap();
+    assert_ne!(plain, multi, "also is part of the hashed node");
+    assert_eq!(plain, snapshot_with(&mut s, &d.0, &[]).unwrap());
+
+    let p = resolve(&s, &multi, "x/f.txt").unwrap();
+    p.verify_file(&multi, b"abc").unwrap();
+    assert!(p.verify_file(&multi, b"abd").is_err());
 }
