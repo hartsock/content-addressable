@@ -16,14 +16,16 @@
 //!
 //! See `WORKSPACE_RULES.md` → "Composition roots are manifests, not members".
 //!
-//! Members land here as their issues do — the first is #45 (Merkle Mountain
-//! Range), then #56 (Merkle-clock), and the rest of the Phase 2+ catalog. Until
-//! the first lands this is an intentionally empty manifest: the scaffold that
-//! lets structure #1 register with a one-line edit to *this* file, never the
-//! crate root.
+//! Members land here as their issues do. So far: `dir_tree` (#105, behind the
+//! default-off `dir-tree` feature). Next are #45 (Merkle Mountain Range), #56
+//! (Merkle-clock), and the rest of the Phase 2+ catalog. Each registers with a
+//! one-line edit to *this* file, never the crate root.
 //!
 //! ```text
 //! // when #45 lands, it adds exactly one line here:
 //! #[cfg(feature = "mmr")]
 //! pub mod mmr;
 //! ```
+
+#[cfg(feature = "dir-tree")]
+pub mod dir_tree;
