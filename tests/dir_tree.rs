@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use content_addressable::store::MemoryStore;
+use content_addressable::store::NodeStoreExt;
 use content_addressable::structures::dir_tree::{resolve, snapshot, DirTreeError, Link};
 #[cfg(feature = "multi-digest")]
 use content_addressable::structures::dir_tree::{snapshot_with, DigestAlg};
@@ -240,4 +241,39 @@ fn snapshot_with_carries_digests_that_verify_file_checks() {
     assert!(want.iter().all(|w| also.contains(w)), "{also:?}");
     p.verify_file(&multi, b"abc").unwrap();
     assert!(p.verify_file(&multi, b"abd").is_err());
+}
+
+#[cfg(feature = "multi-digest")]
+#[test]
+fn a_file_root_checks_each_extra_digest_on_its_own() {
+    // #109 review: BLAKE3 and size are RIGHT for "abc"; one extra digest is of
+    // other bytes. Only the `also` check can catch it.
+    let cid = |code: u64, digest: &[u8]| {
+        let mh = ipld_core::cid::multihash::Multihash::wrap(code, digest).unwrap();
+        ForeignCid::new(ipld_core::cid::Cid::new_v1(0x55, mh)).unwrap()
+    };
+    let hex = |s: &str| -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    };
+    let sha_abc = cid(
+        0x12,
+        &hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+    );
+    let md5_abc = cid(0xd5, &hex("900150983cd24fb0d6963f7d28e17f72"));
+    let (sha_bad, md5_bad) = (cid(0x12, &[9u8; 32]), cid(0xd5, &[9u8; 16]));
+    for also in [[sha_bad, md5_abc], [sha_abc, md5_bad]] {
+        let link = Link::File {
+            id: content_addressable::RawContentId::from_content(b"abc"),
+            size: 3,
+            also: also.into_iter().collect(),
+        };
+        let mut s = MemoryStore::new();
+        let root = s.put_node(&link).unwrap();
+        let p = resolve(&s, &root, "").unwrap();
+        let r = p.verify_file(&root, b"abc");
+        assert!(matches!(r, Err(DirTreeError::ProofMismatch)), "{r:?}");
+    }
 }
