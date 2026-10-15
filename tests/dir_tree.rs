@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use content_addressable::store::MemoryStore;
 use content_addressable::structures::dir_tree::{resolve, snapshot, DirTreeError};
 #[cfg(feature = "multi-digest")]
-use content_addressable::structures::dir_tree::{snapshot_with, DigestAlg};
+use content_addressable::structures::dir_tree::{snapshot_with, DigestAlg, Link};
+#[cfg(feature = "multi-digest")]
+use content_addressable::ForeignCid;
 use proptest::prelude::*;
 
 /// A unique scratch dir, removed on drop.
@@ -150,6 +152,27 @@ fn snapshot_with_carries_digests_that_verify_file_checks() {
     assert_eq!(plain, snapshot_with(&mut s, &d.0, &[]).unwrap());
 
     let p = resolve(&s, &multi, "x/f.txt").unwrap();
+    // Exactly the two RFC digests of "abc" (6234 / 1321): dropping either fails.
+    let cid = |code: u64, hex: &str| {
+        let d: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let mh = ipld_core::cid::multihash::Multihash::wrap(code, &d).unwrap();
+        ForeignCid::new(ipld_core::cid::Cid::new_v1(0x55, mh)).unwrap()
+    };
+    let want = [
+        cid(
+            0x12,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+        cid(0xd5, "900150983cd24fb0d6963f7d28e17f72"),
+    ];
+    let Link::File { also, .. } = &p.file else {
+        panic!("not a file")
+    };
+    assert_eq!(also.iter().copied().collect::<Vec<_>>().len(), 2);
+    assert!(want.iter().all(|w| also.contains(w)), "{also:?}");
     p.verify_file(&multi, b"abc").unwrap();
     assert!(p.verify_file(&multi, b"abd").is_err());
 }
