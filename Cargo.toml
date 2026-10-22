@@ -94,7 +94,7 @@ thiserror = "2"
 # Optional, behind `multi-digest`: the SHA-256 / MD5 verifiers for `dir_tree`
 # `also` digests (issue #107). 0.10.x declares no rust-version and builds on the
 # 1.85 MSRV; `cargo +1.85 test --all-features` is the guard.
-sha2 = { version = "0.10", optional = true }
+sha2 = { version = "0.11", optional = true }
 md-5 = { version = "0.10", optional = true }
 
 [dev-dependencies]
