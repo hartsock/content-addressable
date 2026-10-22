@@ -95,7 +95,7 @@ thiserror = "2"
 # `also` digests (issue #107). 0.10.x declares no rust-version and builds on the
 # 1.85 MSRV; `cargo +1.85 test --all-features` is the guard.
 sha2 = { version = "0.10", optional = true }
-md-5 = { version = "0.10", optional = true }
+md-5 = { version = "0.11", optional = true }
 
 [dev-dependencies]
 # NOTE: `serde` is intentionally NOT repeated here — the `[dependencies]` entry
